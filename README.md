@@ -9,28 +9,28 @@ Intelligent charging scheduler for electric vehicles using OVMS v3. Automaticall
 ## 🎯 What It Does
 
 - **Waits for cheap rate window** - Charges during off-peak hours (e.g., 23:30-05:30 on Octopus Intelligent Go)
-- **Stops at exact target SOC** - Precise battery health management (e.g., 85% for longevity)
+- **Stops at exact target SOC** - Precise battery health management (e.g., 80% for longevity)
 - **One-touch control** - Enable/disable scheduling for long journeys
-- **Stable and tested** - Production-ready on Nissan ENV200
+- **Stable and tested** - Ready on Nissan ENV200
 
 ## ✅ Status: v1.0.0 - Production Ready
 
 **Tested and verified working** on 2025-11-23:
-- ✅ Exact SOC targeting (stops at precisely 85%, no overshoot)
+- ✅ Exact SOC targeting (stops at precisely 80%, no overshoot)
 - ✅ Scheduled charging (waited for 23:30, started automatically)
 - ✅ Stable overnight operation (2.5+ hours, no crashes)
 - ✅ User notifications working in OVMS Connect app
 
-> *"Plug vehicle in, charge starts (reassures user that power is on) then quickly stops - exactly as we want; waits for cheap rate window before charging; started charging at 23:30; charged to user set SoC and then stopped exactly at that % charge, perfect."*
+> *"Plug vehicle in, charge starts (reassures user that power is on) then quickly stops; waits for cheap rate window before charging; starts charging at 23:30; charges to user set SoC and then stops at that % charge."*
 
-See [V1.0.0 Test Results](docs/V1.0.0-TEST-RESULTS.md) for full verification data.
+See [V1.0.0 Test Results](docs/V1.0.0-TEST-RESULTS.md) 
 
 ## 🚀 Quick Start
 
 ### Prerequisites
 - OVMS v3 module (tested on v3.3.x)
 - Vehicle with OVMS charge control support
-- SSH access to your OVMS module
+- SSH or web interface access to your OVMS module
 
 ### Installation (5 minutes)
 
@@ -44,7 +44,7 @@ scp src/charging-v1.0.0.js root@your-ovms-ip:/store/scripts/lib/charging.js
 ssh root@your-ovms-ip
 
 # Set your target SOC (20-100%)
-script eval charging.setTarget(85)
+script eval charging.setTarget(80)
 
 # Set your cheap rate window (24-hour format: hour, minute, hour, minute)
 script eval charging.setWindow(23, 30, 5, 30)
@@ -140,7 +140,7 @@ See [Roadmap](docs/FUTURE-ROADMAP.md) for details.
 
 ## 🏗️ Architecture
 
-### Simple and Reliable Design
+### Simple Design
 
 ```
 User plugs in vehicle
@@ -160,13 +160,7 @@ Native OVMS monitors SOC
 At target SOC → OVMS stops automatically
 ```
 
-**Key Innovation:** Uses native OVMS `suffsoc` (sufficient SOC) for precise stopping instead of custom monitoring.
-
-**Benefits:**
-- Exact SOC targeting (no ±2-3% variance)
-- Minimal CPU load (no ticker.60 polling)
-- Stable and reliable (leverages native OVMS)
-- Less code = fewer bugs
+**Uses native OVMS** `suffsoc` (sufficient SOC) for precise stopping instead of custom monitoring.
 
 See [Design Documentation](docs/DESIGN.md) for details.
 
