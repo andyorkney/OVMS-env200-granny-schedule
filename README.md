@@ -18,8 +18,8 @@ Intelligent charging scheduler for electric vehicles using OVMS v3. Automaticall
 **Tested and verified working** on 2025-11-23:
 - ✅ Exact SOC targeting (stops at precisely 80%, no overshoot)
 - ✅ Scheduled charging (waited for 23:30, started automatically)
-- ✅ Stable overnight operation (2.5+ hours, no crashes)
-- ✅ User notifications working in OVMS Connect app
+- ✅ Stable overnight operation 
+- ✅ User notifications (just) working in OVMS Connect app
 
 > *"Plug vehicle in, charge starts (reassures user that power is on) then quickly stops; waits for cheap rate window before charging; starts charging at 23:30; charges to user set SoC and then stops at that % charge."*
 
