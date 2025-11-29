@@ -1,13 +1,8 @@
 /**
- * OVMS Smart Charging System v1.2.1
+ * OVMS Smart Charging System v1.2.0
  * 
  * PURPOSE: Schedule charging during cheap electricity rate window,
  *          stop automatically at target SOC using native OVMS control.
- * 
- * NEW IN v1.2.1:
- * - State-aware status display (planning/active/completed modes)
- * - Adjusted charger rate default (1.8kW → 2.0kW based on real-world data)
- * - Bug fix: Status now shows accurate timing during active charging
  * 
  * NEW IN v1.2.0:
  * - Ready-by time calculation (e.g., "must be charged by 08:30")
@@ -37,7 +32,7 @@
  * 4. NO long setTimeout() - unreliable
  * 
  * Author: OVMS Community
- * Date: 2025-11-27
+ * Date: 2025-11-26
  * License: MIT
  */
 
@@ -45,8 +40,8 @@
 // VERSION INFO
 // ============================================================================
 
-var VERSION = "1.2.1";
-var BUILD_DATE = "2025-11-27";
+var VERSION = "1.2.0";
+var BUILD_DATE = "2025-11-26";
 
 // ============================================================================
 // CONFIGURATION PARAMETERS
@@ -62,14 +57,12 @@ var CONFIG_PARAMS = {
   cheap_end_hour: { param: "usr", instance: "charging.cheap_end_hour", default: 5 },
   cheap_end_minute: { param: "usr", instance: "charging.cheap_end_minute", default: 30 },
   
-  // Electricity rates (Â£/kWh)
+  // Electricity rates (£/kWh)
   cheap_rate: { param: "usr", instance: "charging.pricing.cheap", default: 0.07 },
   standard_rate: { param: "usr", instance: "charging.pricing.standard", default: 0.292 },
   
-  // Charger specification (kW) - v1.2.1: Updated to 2.0kW based on empirical testing
-  // Real-world data shows granny chargers average ~2.0kW over full charge cycle
-  // (1.8kW nameplate, but actual efficiency varies with charge phase)
-  charger_rate: { param: "usr", instance: "charging.charger_rate", default: 2.0 },
+  // Charger specification (kW)
+  charger_rate: { param: "usr", instance: "charging.charger_rate", default: 1.8 },
   
   // Ready-by time (0:0 = disabled, uses v1.1.0 behavior)
   ready_by_hour: { param: "usr", instance: "charging.ready_by_hour", default: 0 },
@@ -87,9 +80,7 @@ var CONFIG_PARAMS = {
 var state = {
   ticker_subscription: null,
   scheduled_charge_active: false,
-  manual_override: false,
-  actual_start_time: null,      // v1.2.1: Track when charging actually started
-  actual_start_minutes: 0        // v1.2.1: Start time in minutes since midnight
+  manual_override: false
 };
 
 // ============================================================================
@@ -430,11 +421,6 @@ function startCharging() {
   
   print("Starting charge to " + target + "%\n");
   
-  // v1.2.1: Capture actual start time for state-aware status display
-  var now = new Date();
-  state.actual_start_time = now;
-  state.actual_start_minutes = now.getHours() * 60 + now.getMinutes();
-  
   OvmsCommand.Exec("config set xnl autocharge yes");
   OvmsCommand.Exec("config set xnl suffsoc " + target);
   OvmsCommand.Exec("charge start");
@@ -771,19 +757,19 @@ function onPlugIn() {
       cost_info = calculateScheduledChargeCost();
     }
     
-    message += "Cost: Â£" + cost_info.total_cost.toFixed(2);
+    message += "Cost: £" + cost_info.total_cost.toFixed(2);
     
     if (cost_info.has_overflow) {
       message += "\n";
       if (cost_info.pre_window_kwh > 0) {
-        message += "PRE: Â£" + cost_info.pre_window_cost.toFixed(2) + ", ";
+        message += "PRE: £" + cost_info.pre_window_cost.toFixed(2) + ", ";
       }
-      message += "CHEAP: Â£" + cost_info.cheap_window_cost.toFixed(2);
+      message += "CHEAP: £" + cost_info.cheap_window_cost.toFixed(2);
       if (cost_info.post_window_kwh > 0) {
-        message += ", POST: Â£" + cost_info.post_window_cost.toFixed(2);
+        message += ", POST: £" + cost_info.post_window_cost.toFixed(2);
       }
     } else {
-      message += " (save Â£" + cost_info.savings.toFixed(2) + ")";
+      message += " (save £" + cost_info.savings.toFixed(2) + ")";
     }
     
     notify(message);
@@ -798,10 +784,6 @@ function onUnplug() {
   
   state.scheduled_charge_active = false;
   state.manual_override = false;
-  
-  // v1.2.1: Clear actual start time tracking
-  state.actual_start_time = null;
-  state.actual_start_minutes = 0;
   
   notify("Vehicle unplugged. Schedule cleared.");
 }
@@ -918,7 +900,7 @@ exports.setRates = function(cheap, standard) {
   setConfig("cheap_rate", cheap);
   setConfig("standard_rate", standard);
   
-  var msg = "Rates: Â£" + cheap + " (cheap), Â£" + standard + " (standard)";
+  var msg = "Rates: £" + cheap + " (cheap), £" + standard + " (standard)";
   print(msg + "\n");
   notify(msg);
   return msg;
@@ -1136,9 +1118,9 @@ exports.status = function() {
       if (optimal.reason === "early_start_required") {
         var early_minutes = start_h * 60 + start_m - optimal.start_minutes;
         var early_hours = early_minutes / 60;
-        lines.push("  âš ï¸ Early start: " + early_hours.toFixed(1) + "h before window");
+        lines.push("  ⚠️ Early start: " + early_hours.toFixed(1) + "h before window");
       } else {
-        lines.push("  âœ… Can start at window start");
+        lines.push("  ✅ Can start at window start");
       }
       
       lines.push("");
@@ -1152,21 +1134,21 @@ exports.status = function() {
         kwh_needed
       );
       
-      lines.push("  Total cost: Â£" + cost_info.total_cost.toFixed(2));
+      lines.push("  Total cost: £" + cost_info.total_cost.toFixed(2));
       
       if (cost_info.has_overflow) {
         if (cost_info.pre_window_kwh > 0) {
-          lines.push("    PRE: " + cost_info.pre_window_kwh.toFixed(1) + " kWh @ Â£" + cost_info.pre_window_cost.toFixed(2));
+          lines.push("    PRE: " + cost_info.pre_window_kwh.toFixed(1) + " kWh @ £" + cost_info.pre_window_cost.toFixed(2));
         }
         if (cost_info.cheap_window_kwh > 0) {
-          lines.push("    CHEAP: " + cost_info.cheap_window_kwh.toFixed(1) + " kWh @ Â£" + cost_info.cheap_window_cost.toFixed(2));
+          lines.push("    CHEAP: " + cost_info.cheap_window_kwh.toFixed(1) + " kWh @ £" + cost_info.cheap_window_cost.toFixed(2));
         }
         if (cost_info.post_window_kwh > 0) {
-          lines.push("    POST: " + cost_info.post_window_kwh.toFixed(1) + " kWh @ Â£" + cost_info.post_window_cost.toFixed(2));
+          lines.push("    POST: " + cost_info.post_window_kwh.toFixed(1) + " kWh @ £" + cost_info.post_window_cost.toFixed(2));
         }
       } else {
-        lines.push("  âœ… All in cheap window");
-        lines.push("  Saving: Â£" + cost_info.savings.toFixed(2) + " vs standard rate");
+        lines.push("  ✅ All in cheap window");
+        lines.push("  Saving: £" + cost_info.savings.toFixed(2) + " vs standard rate");
       }
     } else {
       // v1.1.0 mode
@@ -1175,19 +1157,19 @@ exports.status = function() {
       var cost_info = calculateScheduledChargeCost();
       
       lines.push("  Need: " + kwh_needed.toFixed(1) + " kWh (~" + charge_hours.toFixed(1) + "h @ " + charger_rate.toFixed(1) + "kW)");
-      lines.push("  Total cost: Â£" + cost_info.total_cost.toFixed(2));
+      lines.push("  Total cost: £" + cost_info.total_cost.toFixed(2));
       
       if (cost_info.has_overflow) {
-        lines.push("  âš ï¸ WARNING: Will extend past window end");
+        lines.push("  ⚠️ WARNING: Will extend past window end");
         if (cost_info.cheap_window_kwh > 0) {
-          lines.push("    Cheap: " + cost_info.cheap_window_kwh.toFixed(1) + " kWh @ Â£" + cost_info.cheap_window_cost.toFixed(2));
+          lines.push("    Cheap: " + cost_info.cheap_window_kwh.toFixed(1) + " kWh @ £" + cost_info.cheap_window_cost.toFixed(2));
         }
         if (cost_info.post_window_kwh > 0) {
-          lines.push("    Overflow: " + cost_info.post_window_kwh.toFixed(1) + " kWh @ Â£" + cost_info.post_window_cost.toFixed(2));
+          lines.push("    Overflow: " + cost_info.post_window_kwh.toFixed(1) + " kWh @ £" + cost_info.post_window_cost.toFixed(2));
         }
       } else {
-        lines.push("  âœ… Will complete in cheap window");
-        lines.push("  Saving: Â£" + cost_info.savings.toFixed(2) + " vs standard rate");
+        lines.push("  ✅ Will complete in cheap window");
+        lines.push("  Saving: £" + cost_info.savings.toFixed(2) + " vs standard rate");
       }
     }
   }
@@ -1195,48 +1177,14 @@ exports.status = function() {
   var output = lines.join("\n");
   print(output + "\n");
   
-  // v1.2.1: State-aware notification (PLANNING / ACTIVE / COMPLETED)
+  // Send SHORT summary as notification (full output too long)
   var summary = "Smart Charging v" + VERSION + "\n";
   summary += "SOC: " + soc.toFixed(0) + "% → " + target + "%\n";
   summary += "Plugged: " + (plugged ? "Yes" : "No") + ", Charging: " + (charging ? "Yes" : "No") + "\n";
   summary += "Mode: " + (isSchedulingEnabled() ? "Scheduled" : "Immediate");
   
-  // Determine state and show appropriate information
-  if (charging && state.actual_start_time) {
-    // STATE: ACTIVE - Currently charging
-    var start_time = formatTime(
-      state.actual_start_time.getHours(),
-      state.actual_start_time.getMinutes()
-    );
-    
-    // Calculate remaining charge
-    var battery = getBatteryParams();
-    var kwh_remaining = battery.effective_capacity * (target - soc) / 100;
-    var charger_rate = parseFloat(getConfig("charger_rate"));
-    var hours_remaining = kwh_remaining / charger_rate;
-    
-    // Estimate finish time
-    var finish_minutes = getCurrentMinuteOfDay() + (hours_remaining * 60);
-    var finish_hour = Math.floor(finish_minutes / 60) % 24;
-    var finish_min = Math.floor(finish_minutes % 60);
-    var finish_time = formatTime(finish_hour, finish_min);
-    
-    summary += "\nStarted: " + start_time + ", Est. finish: " + finish_time;
-    
-    // Calculate remaining cost
-    var cost_estimate = kwh_remaining * parseFloat(getConfig("cheap_rate"));
-    summary += "\nCost: £" + cost_estimate.toFixed(2) + " (est. remaining)";
-    
-  } else if (plugged && soc >= target && state.actual_start_time) {
-    // STATE: COMPLETED - Finished charging
-    var start_time = formatTime(
-      state.actual_start_time.getHours(),
-      state.actual_start_time.getMinutes()
-    );
-    summary += "\nCompleted! Started: " + start_time;
-    
-  } else if (plugged && soc < target && isSchedulingEnabled()) {
-    // STATE: PLANNING - Waiting to start
+  if (plugged && soc < target && isSchedulingEnabled()) {
+    // Check if ready-by is enabled
     var ready_h = parseInt(getConfig("ready_by_hour")) || 0;
     var ready_m = parseInt(getConfig("ready_by_minute")) || 0;
     
