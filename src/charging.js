@@ -32,7 +32,7 @@
 // VERSION INFO
 // ============================================================================
 
-var VERSION = "1.0.0";
+var VERSION = "1.1.0";
 var BUILD_DATE = "2025-11-23";
 
 // ============================================================================
@@ -230,6 +230,172 @@ function isWithinWindow() {
 }
 
 // ============================================================================
+// COST CALCULATION (v1.1.0 - Future-proof for v1.2.0)
+// ============================================================================
+
+/**
+ * Convert time (hours, minutes) to minutes since midnight
+ */
+function timeToMinutes(hour, minute) {
+  return hour * 60 + minute;
+}
+
+/**
+ * Get window duration in hours
+ */
+function getWindowDurationHours() {
+  var start_hour = parseInt(getConfig("cheap_start_hour"));
+  var start_minute = parseInt(getConfig("cheap_start_minute"));
+  var end_hour = parseInt(getConfig("cheap_end_hour"));
+  var end_minute = parseInt(getConfig("cheap_end_minute"));
+  
+  var start_minutes = timeToMinutes(start_hour, start_minute);
+  var end_minutes = timeToMinutes(end_hour, end_minute);
+  
+  var duration_minutes;
+  if (start_minutes < end_minutes) {
+    // Same day window
+    duration_minutes = end_minutes - start_minutes;
+  } else {
+    // Overnight window
+    duration_minutes = (24 * 60) - start_minutes + end_minutes;
+  }
+  
+  return duration_minutes / 60;
+}
+
+/**
+ * Calculate cost for charging between start and end times
+ * Future-proof: works for both fixed schedule (v1.0) and ready-by (v1.2)
+ * 
+ * @param start_minutes - Start time in minutes since midnight
+ * @param end_minutes - End time in minutes since midnight  
+ * @param kwh_needed - Total kWh to charge
+ * @return Object with cost breakdown
+ */
+function calculateCostForTimeRange(start_minutes, end_minutes, kwh_needed) {
+  var cheap_rate = parseFloat(getConfig("cheap_rate"));
+  var standard_rate = parseFloat(getConfig("standard_rate"));
+  
+  var window_start_hour = parseInt(getConfig("cheap_start_hour"));
+  var window_start_minute = parseInt(getConfig("cheap_start_minute"));
+  var window_end_hour = parseInt(getConfig("cheap_end_hour"));
+  var window_end_minute = parseInt(getConfig("cheap_end_minute"));
+  
+  var window_start = timeToMinutes(window_start_hour, window_start_minute);
+  var window_end = timeToMinutes(window_end_hour, window_end_minute);
+  
+  // Handle overnight charging (spans midnight)
+  var total_minutes = end_minutes - start_minutes;
+  if (total_minutes < 0) {
+    total_minutes += (24 * 60); // Add 24 hours
+  }
+  
+  // Calculate overlap with cheap window
+  var cheap_minutes = 0;
+  var pre_window_minutes = 0;
+  var post_window_minutes = 0;
+  
+  // Handle overnight window crossing midnight
+  var in_window_start = false;
+  var in_window_end = false;
+  
+  if (window_start < window_end) {
+    // Normal window (same day)
+    in_window_start = (start_minutes >= window_start && start_minutes < window_end);
+    in_window_end = (end_minutes > window_start && end_minutes <= window_end);
+  } else {
+    // Overnight window
+    in_window_start = (start_minutes >= window_start || start_minutes < window_end);
+    in_window_end = (end_minutes >= window_start || end_minutes < window_end);
+  }
+  
+  // Simplified calculation (proportional distribution)
+  if (in_window_start && in_window_end) {
+    // All charging in window
+    cheap_minutes = total_minutes;
+  } else if (!in_window_start && !in_window_end) {
+    // All outside window
+    if (start_minutes < window_start) {
+      pre_window_minutes = total_minutes;
+    } else {
+      post_window_minutes = total_minutes;
+    }
+  } else {
+    // Spans window boundaries - approximate proportionally
+    var window_duration = getWindowDurationHours() * 60;
+    
+    if (start_minutes < window_start) {
+      // Starts before window
+      pre_window_minutes = window_start - start_minutes;
+      var remaining = total_minutes - pre_window_minutes;
+      cheap_minutes = Math.min(remaining, window_duration);
+      post_window_minutes = Math.max(0, remaining - cheap_minutes);
+    } else {
+      // Starts in window, ends after
+      cheap_minutes = window_end - start_minutes;
+      if (cheap_minutes < 0) cheap_minutes += (24 * 60);
+      post_window_minutes = total_minutes - cheap_minutes;
+    }
+  }
+  
+  // Convert minutes to kWh (proportional)
+  var kwh_rate = kwh_needed / total_minutes;
+  var pre_kwh = (kwh_rate * pre_window_minutes) || 0;
+  var cheap_kwh = (kwh_rate * cheap_minutes) || 0;
+  var post_kwh = (kwh_rate * post_window_minutes) || 0;
+  
+  // Calculate costs
+  var pre_cost = pre_kwh * standard_rate;
+  var cheap_cost = cheap_kwh * cheap_rate;
+  var post_cost = post_kwh * standard_rate;
+  var total_cost = pre_cost + cheap_cost + post_cost;
+  
+  // Calculate savings vs all standard rate
+  var standard_cost = kwh_needed * standard_rate;
+  var savings = standard_cost - total_cost;
+  
+  return {
+    pre_window_kwh: pre_kwh,
+    cheap_window_kwh: cheap_kwh,
+    post_window_kwh: post_kwh,
+    pre_window_cost: pre_cost,
+    cheap_window_cost: cheap_cost,
+    post_window_cost: post_cost,
+    total_cost: total_cost,
+    savings: savings,
+    has_overflow: (pre_kwh > 0 || post_kwh > 0)
+  };
+}
+
+/**
+ * Calculate charging cost for current fixed schedule (v1.0.0 behavior)
+ */
+function calculateScheduledChargeCost() {
+  var soc = getSOC();
+  var target = parseInt(getConfig("target_soc")) || 80;
+  var battery = getBatteryParams();
+  var charger_rate = parseFloat(getConfig("charger_rate"));
+  
+  // How much energy needed?
+  var kwh_needed = battery.effective_capacity * (target - soc) / 100;
+  
+  // How long will it take?
+  var charge_hours = kwh_needed / charger_rate;
+  
+  // When would we start? (window start)
+  var start_hour = parseInt(getConfig("cheap_start_hour"));
+  var start_minute = parseInt(getConfig("cheap_start_minute"));
+  var start_minutes = timeToMinutes(start_hour, start_minute);
+  
+  // When would we finish?
+  var end_minutes = start_minutes + (charge_hours * 60);
+  
+  // Calculate cost
+  return calculateCostForTimeRange(start_minutes, end_minutes, kwh_needed);
+}
+
+// ============================================================================
 // CHARGING CONTROL
 // ============================================================================
 
@@ -376,7 +542,34 @@ function onPlugIn() {
     // Outside window - stop it and wait for schedule
     print("Plugged in outside cheap window - stopping charge\n");
     OvmsCommand.Exec("charge stop");
-    notify("Plugged in at " + soc.toFixed(0) + "%. Will charge to " + target + "% during " + window_str + ".");
+    
+    // Calculate and show cost estimate
+    var cost_info = calculateScheduledChargeCost();
+    var battery = getBatteryParams();
+    var kwh_needed = battery.effective_capacity * (target - soc) / 100;
+    var charger_rate = parseFloat(getConfig("charger_rate"));
+    var charge_hours = kwh_needed / charger_rate;
+    
+    var message = "Plugged in at " + soc.toFixed(0) + "%. Will charge to " + target + "% during " + window_str + ".\n";
+    message += "Need " + kwh_needed.toFixed(1) + " kWh (~" + charge_hours.toFixed(1) + "h).\n";
+    message += "Est. cost: £" + cost_info.total_cost.toFixed(2);
+    
+    if (cost_info.has_overflow) {
+      message += " ⚠️\n";
+      if (cost_info.pre_window_kwh > 0) {
+        message += "PRE-WINDOW: " + cost_info.pre_window_kwh.toFixed(1) + " kWh @ £" + cost_info.pre_window_cost.toFixed(2) + "\n";
+      }
+      if (cost_info.cheap_window_kwh > 0) {
+        message += "CHEAP: " + cost_info.cheap_window_kwh.toFixed(1) + " kWh @ £" + cost_info.cheap_window_cost.toFixed(2) + "\n";
+      }
+      if (cost_info.post_window_kwh > 0) {
+        message += "OVERFLOW: " + cost_info.post_window_kwh.toFixed(1) + " kWh @ £" + cost_info.post_window_cost.toFixed(2);
+      }
+    } else {
+      message += " (saving £" + cost_info.savings.toFixed(2) + ")";
+    }
+    
+    notify(message);
   }
 }
 
@@ -618,6 +811,33 @@ exports.status = function() {
   var suffsoc = OvmsConfig.Get("xnl", "suffsoc") || "0";
   lines.push("  autocharge: " + autocharge);
   lines.push("  suffsoc: " + suffsoc + "%");
+  
+  // Add cost estimate if plugged in and below target
+  if (plugged && soc < target && isSchedulingEnabled()) {
+    lines.push("");
+    lines.push("Cost Estimate:");
+    
+    var cost_info = calculateScheduledChargeCost();
+    var kwh_needed = battery.effective_capacity * (target - soc) / 100;
+    var charger_rate = parseFloat(getConfig("charger_rate"));
+    var charge_hours = kwh_needed / charger_rate;
+    
+    lines.push("  Need: " + kwh_needed.toFixed(1) + " kWh (~" + charge_hours.toFixed(1) + "h @ " + charger_rate.toFixed(1) + "kW)");
+    lines.push("  Total cost: £" + cost_info.total_cost.toFixed(2));
+    
+    if (cost_info.has_overflow) {
+      lines.push("  ⚠️ WARNING: Will extend past window end");
+      if (cost_info.cheap_window_kwh > 0) {
+        lines.push("    Cheap: " + cost_info.cheap_window_kwh.toFixed(1) + " kWh @ £" + cost_info.cheap_window_cost.toFixed(2));
+      }
+      if (cost_info.post_window_kwh > 0) {
+        lines.push("    Overflow: " + cost_info.post_window_kwh.toFixed(1) + " kWh @ £" + cost_info.post_window_cost.toFixed(2));
+      }
+    } else {
+      lines.push("  ✅ Will complete in cheap window");
+      lines.push("  Saving: £" + cost_info.savings.toFixed(2) + " vs standard rate");
+    }
+  }
   
   var output = lines.join("\n");
   print(output + "\n");

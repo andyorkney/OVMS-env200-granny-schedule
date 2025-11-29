@@ -1,0 +1,16 @@
+yamlname: Duktape Compatibility
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install Duktape
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y duktape
+      - name: Test JS files
+        run: |
+          for file in *.js; do
+            duk "$file" || exit 1
+          done
