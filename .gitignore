@@ -1,0 +1,17 @@
+# macOS system files
+.DS_Store
+**/.DS_Store
+
+# Node modules (if applicable)
+node_modules/
+
+# Environment files
+.env
+.env.local
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
