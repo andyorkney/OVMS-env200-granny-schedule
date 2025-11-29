@@ -68,16 +68,19 @@ script eval "charging.version()"
 
 ```javascript
 // Set target SOC (default: 80%)
-charging.setLimits(80, 75)  // target 80%, skip if above 75%
+charging.setTarget(80)  // or 90, 95, 100 - whatever you prefer
 
 // Set cheap rate window (default: 23:30-05:30)
-charging.setSchedule(23, 30, 5, 30)
+charging.setWindow(23,30,5,30)
 
 // Set ready-by time (NEW in v1.2.0!)
-charging.setReadyBy(8, 30)  // Must be charged by 08:30
+charging.setReadyBy(8,30)  // Must be charged by 08:30
 
 // Set charger rate (default: 2.0kW in v1.2.1)
-charging.setChargeRate(2.0)
+charging.setCharger(2.0)
+
+// Set electricity rates (default: £0.07 cheap, £0.292 standard)
+charging.setRates(0.07,0.292)
 
 // Enable scheduled charging
 charging.useSchedule()
@@ -158,18 +161,18 @@ charging.useSchedule()       // Enable scheduled charging
 charging.chargeNow()          // Disable schedule, charge immediately
 
 // Timing
-charging.setSchedule(h1, m1, h2, m2)  // Cheap rate window
-charging.setReadyBy(h, m)             // Ready-by deadline
-charging.clearReadyBy()               // Disable ready-by
+charging.setWindow(h1,m1,h2,m2)  // Cheap rate window
+charging.setReadyBy(h,m)           // Ready-by deadline
+charging.clearReadyBy()             // Disable ready-by
 
-// Charging limits
-charging.setLimits(target, skip)      // Target SOC and skip threshold
+// Charging target
+charging.setTarget(soc)             // Set target SOC (20-100%)
 
 // Charger
-charging.setChargeRate(kw)            // Set charger rate in kW
+charging.setCharger(kw)             // Set charger rate in kW
 
 // Pricing
-charging.setPricing(cheap, standard)  // Set rates in £/kWh
+charging.setRates(cheap,standard)  // Set rates in £/kWh
 
 // Control
 charging.start()              // Manual start
@@ -182,7 +185,6 @@ charging.version()            // Show version
 
 ### Default Values
 - Target SOC: 80%
-- Skip if above: 75%
 - Cheap window: 23:30 - 05:30
 - Cheap rate: £0.07/kWh
 - Standard rate: £0.292/kWh
