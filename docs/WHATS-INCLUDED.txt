@@ -1,0 +1,164 @@
+╔══════════════════════════════════════════════════════════════════════════╗
+║                  v1.2.1 RELEASE PACKAGE - WHAT'S INCLUDED                ║
+╚══════════════════════════════════════════════════════════════════════════╝
+
+📦 READY TO DEPLOY: v1.2.1 (2025-11-27)
+
+═══════════════════════════════════════════════════════════════════════════
+
+🎯 QUICK START (3 STEPS)
+
+1. Upload:   scp charging-v1_2_1-WIP.js root@<ovms>:/store/scripts/lib/charging.js
+2. Reload:   ssh root@<ovms> "script reload"
+3. Verify:   script eval "charging.version()"  # Should show v1.2.1
+
+═══════════════════════════════════════════════════════════════════════════
+
+📁 FILES IN THIS PACKAGE
+
+Core Implementation:
+  charging-v1_2_1-WIP.js (42K)         👈 UPLOAD THIS TO YOUR OVMS
+
+Documentation:
+  README.md (7.7K)                      Complete user guide
+  SMART-CHARGING-CHANGELOG.md (6.5K)   Version history
+  DEPLOYMENT-CHECKLIST.md               Step-by-step deployment & testing
+  V1_2_1-DEPLOYMENT-SUMMARY.md          Quick deployment reference
+  V1_2_1-RELEASE-PACKAGE.md             Complete package overview
+  WHATS-INCLUDED.txt                    This file
+
+═══════════════════════════════════════════════════════════════════════════
+
+✨ WHAT'S NEW IN v1.2.1
+
+Bug Fix: State-Aware Status Display
+  ✅ Fixed: Status showed stale predictions during charging
+  ✅ Now shows: PLANNING / ACTIVE / COMPLETED states
+  ✅ Displays correct times based on current charging state
+
+Improvement: Charger Rate Adjusted
+  ✅ Changed default from 1.8kW to 2.0kW
+  ✅ Based on real-world testing data
+  ✅ Fixes 10% time over-estimation
+
+═══════════════════════════════════════════════════════════════════════════
+
+🎓 WHAT v1.2.0 PROVED (Real-World Tested)
+
+Night 1:  29% → 80% by 08:00
+  ✅ Started: 22:17 (predicted 22:15) - 2 minute accuracy!
+  ✅ Stopped: 80.3% - perfect SOC control!
+
+Night 2:  46% → 95% by 08:30  
+  ✅ Started on time
+  ✅ Stopped exactly at 95%
+  ⚠️ Finished 10% faster than predicted → led to v1.2.1
+
+User Quote: "Everything about the charging was great. Started within 
+            2-3 mins of expected time, stopped bang on 80%"
+
+═══════════════════════════════════════════════════════════════════════════
+
+🔧 KEY FEATURES
+
+⏰ Ready-By Time (v1.2.0)
+   Configure deadline: charging.setReadyBy(8, 30)
+   System calculates optimal start time
+   Prefers cheap window, starts early only if needed
+
+🎯 Native OVMS SOC Control (v1.2.0)
+   Uses built-in autocharge + suffsoc
+   Perfect accuracy: ±1% of target SOC
+   No custom monitoring needed!
+
+📊 Smart Scheduling (v1.1.0)
+   Charges during cheap rate window (£0.07/kWh)
+   Avoids standard rate (£0.292/kWh)
+   Shows cost estimates and warnings
+
+📱 Notifications (All Versions)
+   Plug-in detection
+   Start/stop confirmations
+   State-aware status (v1.2.1!)
+   Cost estimates
+
+═══════════════════════════════════════════════════════════════════════════
+
+📋 DEPLOYMENT CHECKLIST
+
+Pre-Deployment:
+  [x] Code syntax validated
+  [x] Version numbers updated
+  [x] Documentation complete
+  [x] Backwards compatible
+  [x] Rollback plan ready
+
+Deployment (5 minutes):
+  [ ] Upload charging-v1_2_1-WIP.js
+  [ ] SSH to OVMS
+  [ ] Run: script reload
+  [ ] Verify: charging.version()
+  [ ] Check: charging.status()
+
+Testing (3-5 nights):
+  [ ] Test all three status states
+  [ ] Verify time prediction accuracy
+  [ ] Collect real-world data
+  [ ] User feedback positive
+  [ ] No crashes or issues
+
+═══════════════════════════════════════════════════════════════════════════
+
+🆘 ROLLBACK PLAN
+
+If issues occur, rollback is easy:
+
+  scp charging-v1_2_0-WIP.js root@<ovms>:/store/scripts/lib/charging.js
+  ssh root@<ovms> "script reload"
+
+v1.2.0 is stable and proven - safe fallback available.
+
+═══════════════════════════════════════════════════════════════════════════
+
+💡 NEXT STEPS
+
+After Successful Testing:
+  1. Document results in DEPLOYMENT-CHECKLIST.md
+  2. Collect user feedback
+  3. Plan v1.3.0 features:
+     - Enhanced cost breakdown
+     - Dynamic rate detection (maybe)
+     - Running cost tracking (maybe)
+
+If Issues Found:
+  1. Document what went wrong
+  2. Rollback to v1.2.0
+  3. Debug and create v1.2.2
+
+═══════════════════════════════════════════════════════════════════════════
+
+📞 SUPPORT
+
+All documentation in /mnt/user-data/outputs/
+
+Quick Reference:
+  - README.md → Complete user guide
+  - DEPLOYMENT-CHECKLIST.md → Testing procedures
+  - SMART-CHARGING-CHANGELOG.md → Version history
+
+═══════════════════════════════════════════════════════════════════════════
+
+✅ READY TO DEPLOY!
+
+Confidence: HIGH
+Risk: LOW (easy rollback)
+Status: Production-ready after 3-5 nights testing
+
+Questions before deploying? Check README.md or DEPLOYMENT-CHECKLIST.md
+
+═══════════════════════════════════════════════════════════════════════════
+
+Package prepared: 2025-11-27
+Status: ✅ READY
+Version: 1.2.1
+
