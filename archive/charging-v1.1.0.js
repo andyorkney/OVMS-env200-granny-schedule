@@ -1,15 +1,8 @@
 /**
- * OVMS Smart Charging System v1.2.0
+ * OVMS Smart Charging System v1.0.0
  * 
  * PURPOSE: Schedule charging during cheap electricity rate window,
  *          stop automatically at target SOC using native OVMS control.
- * 
- * NEW IN v1.2.0:
- * - Ready-by time calculation (e.g., "must be charged by 08:30")
- * - Optimal start time: Prefer cheap window, only start early if needed
- * - Better command naming: useSchedule() / chargeNow()
- * - Enhanced notifications with timing details
- * - 100% backwards compatible with v1.1.0
  * 
  * BREAKTHROUGH: Uses native OVMS charge control (autocharge + suffsoc)
  *               eliminating need for custom SOC monitoring!
@@ -23,7 +16,6 @@
  * - Native OVMS SOC control (2025-11-23 discovery - perfect accuracy)
  * - Simple time window logic (from v0.1.0 - works across midnight)
  * - CONFIG_PARAMS structure (from v3.1.0 - well organized)
- * - Ready-by calculation (v1.2.0 - prefer cheap window start)
  * 
  * CRITICAL REQUIREMENTS:
  * 1. Must have "config set xnl autocharge yes" for native SOC control
@@ -32,7 +24,7 @@
  * 4. NO long setTimeout() - unreliable
  * 
  * Author: OVMS Community
- * Date: 2025-11-26
+ * Date: 2025-11-23
  * License: MIT
  */
 
@@ -40,8 +32,8 @@
 // VERSION INFO
 // ============================================================================
 
-var VERSION = "1.2.0";
-var BUILD_DATE = "2025-11-26";
+var VERSION = "1.1.0";
+var BUILD_DATE = "2025-11-23";
 
 // ============================================================================
 // CONFIGURATION PARAMETERS
@@ -58,15 +50,11 @@ var CONFIG_PARAMS = {
   cheap_end_minute: { param: "usr", instance: "charging.cheap_end_minute", default: 30 },
   
   // Electricity rates (£/kWh)
-  cheap_rate: { param: "usr", instance: "charging.pricing.cheap", default: 0.07 },
-  standard_rate: { param: "usr", instance: "charging.pricing.standard", default: 0.292 },
+  cheap_rate: { param: "usr", instance: "charging.cheap_rate", default: 0.07 },
+  standard_rate: { param: "usr", instance: "charging.standard_rate", default: 0.292 },
   
   // Charger specification (kW)
   charger_rate: { param: "usr", instance: "charging.charger_rate", default: 1.8 },
-  
-  // Ready-by time (0:0 = disabled, uses v1.1.0 behavior)
-  ready_by_hour: { param: "usr", instance: "charging.ready_by_hour", default: 0 },
-  ready_by_minute: { param: "usr", instance: "charging.ready_by_minute", default: 0 },
   
   // Battery overrides (0 = auto-detect)
   battery_override: { param: "usr", instance: "charging.battery_override", default: 0 },
@@ -96,9 +84,8 @@ function getConfig(key) {
   
   var value = OvmsConfig.Get(cfg.param, cfg.instance);
   
-  // OVMS quirk: returns string "undefined" instead of actual undefined
-  // Return default if value is undefined, empty string, null, or string "undefined"
-  if (value === undefined || value === "" || value === null || value === "undefined") {
+  // Return default if value is undefined, empty string, or would parse to NaN
+  if (value === undefined || value === "" || value === null) {
     return cfg.default;
   }
   
@@ -309,52 +296,51 @@ function calculateCostForTimeRange(start_minutes, end_minutes, kwh_needed) {
   var pre_window_minutes = 0;
   var post_window_minutes = 0;
   
-  // Normalize times: keep everything in 0-1440 range for same-day, or allow >1440 for next-day
-  var charge_start = start_minutes % (24 * 60);
-  var charge_duration = end_minutes - start_minutes;
-  var charge_end = charge_start + charge_duration;
+  // Handle overnight window crossing midnight
+  var in_window_start = false;
+  var in_window_end = false;
   
-  // Window times
-  var win_start = window_start;
-  var win_end = window_end;
-  
-  // If window crosses midnight, extend win_end into next day
-  if (win_end < win_start) {
-    win_end += (24 * 60);
+  if (window_start < window_end) {
+    // Normal window (same day)
+    in_window_start = (start_minutes >= window_start && start_minutes < window_end);
+    in_window_end = (end_minutes > window_start && end_minutes <= window_end);
+  } else {
+    // Overnight window
+    in_window_start = (start_minutes >= window_start || start_minutes < window_end);
+    in_window_end = (end_minutes >= window_start || end_minutes < window_end);
   }
   
-  // If charge crosses midnight, extend charge_end into next day  
-  if (charge_end > (24 * 60) || (charge_end < charge_start && charge_duration > 0)) {
-    // Charge extends into next day - already handled by charge_end = charge_start + duration
-  }
-  
-  // Calculate overlap between [charge_start, charge_end] and [win_start, win_end]
-  var overlap_start = Math.max(charge_start, win_start);
-  var overlap_end = Math.min(charge_end, win_end);
-  
-  if (overlap_end > overlap_start) {
-    // Overlap exists
-    cheap_minutes = overlap_end - overlap_start;
-    
-    if (charge_start < win_start) {
-      pre_window_minutes = win_start - charge_start;
-    }
-    
-    if (charge_end > win_end) {
-      post_window_minutes = charge_end - win_end;
+  // Simplified calculation (proportional distribution)
+  if (in_window_start && in_window_end) {
+    // All charging in window
+    cheap_minutes = total_minutes;
+  } else if (!in_window_start && !in_window_end) {
+    // All outside window
+    if (start_minutes < window_start) {
+      pre_window_minutes = total_minutes;
+    } else {
+      post_window_minutes = total_minutes;
     }
   } else {
-    // No overlap
-    if (charge_end <= win_start) {
-      pre_window_minutes = charge_duration;
+    // Spans window boundaries - approximate proportionally
+    var window_duration = getWindowDurationHours() * 60;
+    
+    if (start_minutes < window_start) {
+      // Starts before window
+      pre_window_minutes = window_start - start_minutes;
+      var remaining = total_minutes - pre_window_minutes;
+      cheap_minutes = Math.min(remaining, window_duration);
+      post_window_minutes = Math.max(0, remaining - cheap_minutes);
     } else {
-      post_window_minutes = charge_duration;
+      // Starts in window, ends after
+      cheap_minutes = window_end - start_minutes;
+      if (cheap_minutes < 0) cheap_minutes += (24 * 60);
+      post_window_minutes = total_minutes - cheap_minutes;
     }
   }
   
   // Convert minutes to kWh (proportional)
-  var kwh_rate = kwh_needed / charge_duration;
-  
+  var kwh_rate = kwh_needed / total_minutes;
   var pre_kwh = (kwh_rate * pre_window_minutes) || 0;
   var cheap_kwh = (kwh_rate * cheap_minutes) || 0;
   var post_kwh = (kwh_rate * post_window_minutes) || 0;
@@ -442,105 +428,6 @@ function stopCharging() {
 }
 
 // ============================================================================
-// OPTIMAL START TIME CALCULATION (v1.2.0 - Ready-By Time Feature)
-// ============================================================================
-
-/**
- * Calculate optimal start time for charging
- * Returns object with start time and metadata
- * 
- * Priority logic:
- * 1. Default: Start at cheap window start (prefer cheap rates)
- * 2. Only start earlier: If would miss ready-by deadline
- * 3. Prefer finishing early over exact timing
- */
-function calculateOptimalStart() {
-  var ready_hour = parseInt(getConfig("ready_by_hour"));
-  var ready_minute = parseInt(getConfig("ready_by_minute"));
-  
-  // Handle NaN from config
-  if (isNaN(ready_hour)) ready_hour = 0;
-  if (isNaN(ready_minute)) ready_minute = 0;
-  
-  var window_start_hour = parseInt(getConfig("cheap_start_hour"));
-  var window_start_minute = parseInt(getConfig("cheap_start_minute"));
-  var window_start_minutes = timeToMinutes(window_start_hour, window_start_minute);
-  
-  // Ready-by disabled? Use v1.1.0 behavior (start at window start)
-  if (ready_hour === 0 && ready_minute === 0) {
-    return {
-      start_minutes: window_start_minutes,
-      finish_minutes: null,
-      ready_by_minutes: null,
-      reason: "window_start",
-      ready_by_enabled: false,
-      has_pre_window: false,
-      charge_duration_hours: 0,
-      kwh_needed: 0
-    };
-  }
-  
-  // Calculate required charge time
-  var soc = getSOC();
-  var target = parseInt(getConfig("target_soc"));
-  if (isNaN(target)) target = 80;
-  
-  var battery = getBatteryParams();
-  var kwh_needed = battery.effective_capacity * (target - soc) / 100;
-  var charger_rate = parseFloat(getConfig("charger_rate"));
-  if (isNaN(charger_rate) || charger_rate === 0) charger_rate = 1.8;
-  
-  var charge_hours = kwh_needed / charger_rate;
-  var charge_minutes = charge_hours * 60;
-  
-  // When is the deadline?
-  var ready_by_minutes = timeToMinutes(ready_hour, ready_minute);
-  
-  // Normalize for overnight scenarios
-  // If ready_by is "early morning" (< 12:00), assume it's tomorrow
-  if (ready_by_minutes < 720) {  // Before noon
-    ready_by_minutes += (24 * 60);  // Next day
-  }
-  
-  // If window start is late evening (> 20:00), keep as current day
-  // This creates a continuous timeline: tonight 23:30 -> tomorrow 08:30
-  
-  // Calculate: When would we finish if we start at window start?
-  var finish_if_start_at_window = window_start_minutes + charge_minutes;
-  
-  // DECISION LOGIC
-  if (finish_if_start_at_window <= ready_by_minutes) {
-    // Perfect! We can start at cheap window and finish before/at deadline
-    return {
-      start_minutes: window_start_minutes,
-      finish_minutes: finish_if_start_at_window,
-      ready_by_minutes: ready_by_minutes,
-      reason: "window_start",
-      on_time: true,
-      has_pre_window: false,
-      ready_by_enabled: true,
-      charge_duration_hours: charge_hours,
-      kwh_needed: kwh_needed
-    };
-  } else {
-    // Must start earlier to meet deadline
-    var required_start_minutes = ready_by_minutes - charge_minutes;
-    
-    return {
-      start_minutes: required_start_minutes,
-      finish_minutes: ready_by_minutes,
-      ready_by_minutes: ready_by_minutes,
-      reason: "early_start_required",
-      on_time: true,
-      has_pre_window: (required_start_minutes < window_start_minutes),
-      ready_by_enabled: true,
-      charge_duration_hours: charge_hours,
-      kwh_needed: kwh_needed
-    };
-  }
-}
-
-// ============================================================================
 // SCHEDULE CHECKING (v0.1.0 approach - ticker.300 = every 5 minutes)
 // ============================================================================
 
@@ -563,8 +450,6 @@ function shouldCharge() {
 /**
  * Check schedule and start charging if conditions are met
  * Called every 5 minutes by ticker.300
- * 
- * v1.2.0: Now uses calculateOptimalStart() for ready-by time support
  */
 function checkSchedule() {
   // Must be plugged in
@@ -587,64 +472,20 @@ function checkSchedule() {
     return;
   }
   
-  // Check if should charge (SOC check)
+  // Check if within cheap window
+  if (!isWithinWindow()) {
+    return;
+  }
+  
+  // Check if should charge
   if (!shouldCharge()) {
     return;
   }
   
-  // Calculate optimal start time
-  var optimal = calculateOptimalStart();
-  
-  // Get current time
-  var now = getCurrentMinuteOfDay();
-  
-  // Normalize start time for comparison
-  var start_time = optimal.start_minutes;
-  if (start_time > 1440) {
-    start_time -= (24 * 60);  // Bring back to today
-  }
-  
-  // Are we at or past the optimal start time?
-  // For overnight windows, handle wrap-around
-  var window_start_hour = parseInt(getConfig("cheap_start_hour"));
-  var should_start = false;
-  
-  if (window_start_hour >= 20) {
-    // Late evening start (e.g., 23:30)
-    // We're in the right time if:
-    // - Current time >= start time (e.g., 21:30 <= now)
-    // - OR current time is early morning (< 12:00) and we're in ready-by mode
-    if (now >= start_time) {
-      should_start = true;
-    } else if (optimal.ready_by_enabled && now < 720) {
-      // Early morning, ready-by enabled, probably missed start yesterday
-      // Check if we're before finish time
-      var finish_time = optimal.finish_minutes;
-      if (finish_time > 1440) finish_time -= (24 * 60);
-      if (now < finish_time) {
-        should_start = true;
-      }
-    }
-  } else {
-    // Daytime window (e.g., 09:00-17:00)
-    if (now >= start_time) {
-      should_start = true;
-    }
-  }
-  
-  if (!should_start) {
-    return;  // Not yet time to start
-  }
-  
   // All conditions met - start charging!
+  print("Schedule check: Starting charge (within cheap window)\n");
+  
   var target = parseInt(getConfig("target_soc")) || 80;
-  
-  if (optimal.ready_by_enabled && optimal.reason === "early_start_required") {
-    print("Schedule check: Starting charge (early start for ready-by deadline)\n");
-  } else {
-    print("Schedule check: Starting charge (optimal time reached)\n");
-  }
-  
   OvmsCommand.Exec("config set xnl autocharge yes");
   OvmsCommand.Exec("config set xnl suffsoc " + target);
   OvmsCommand.Exec("charge start");
@@ -702,74 +543,30 @@ function onPlugIn() {
     print("Plugged in outside cheap window - stopping charge\n");
     OvmsCommand.Exec("charge stop");
     
-    // Calculate optimal start time
-    var optimal = calculateOptimalStart();
+    // Calculate and show cost estimate
+    var cost_info = calculateScheduledChargeCost();
     var battery = getBatteryParams();
     var kwh_needed = battery.effective_capacity * (target - soc) / 100;
     var charger_rate = parseFloat(getConfig("charger_rate"));
     var charge_hours = kwh_needed / charger_rate;
     
-    var message = "Plugged in at " + soc.toFixed(0) + "%.";
-    
-    if (optimal.ready_by_enabled) {
-      // Ready-by mode - show timing details
-      var ready_time = formatTime(
-        Math.floor(optimal.ready_by_minutes / 60) % 24,
-        optimal.ready_by_minutes % 60
-      );
-      message += " Target " + target + "% by " + ready_time + ".\n";
-      
-      var start_time = formatTime(
-        Math.floor(optimal.start_minutes / 60) % 24,
-        Math.floor(optimal.start_minutes % 60)
-      );
-      
-      if (optimal.reason === "early_start_required") {
-        var early_minutes = window_start_hour * 60 + window_start_minute - optimal.start_minutes;
-        var early_hours = early_minutes / 60;
-        message += "Will start at " + start_time + " (" + early_hours.toFixed(1) + "h before window).\n";
-      } else {
-        message += "Will start at " + start_time + " (window start).\n";
-      }
-      
-      var finish_time = formatTime(
-        Math.floor(optimal.finish_minutes / 60) % 24,
-        Math.floor(optimal.finish_minutes % 60)
-      );
-      message += "Finish ~" + finish_time + ".";
-    } else {
-      // v1.1.0 mode (no ready-by)
-      message += " Will charge to " + target + "% during " + window_str + ".";
-    }
-    
-    message += " Need " + kwh_needed.toFixed(1) + " kWh (~" + charge_hours.toFixed(1) + "h).\n";
-    
-    // Calculate costs using optimal timing
-    var cost_info;
-    if (optimal.ready_by_enabled) {
-      cost_info = calculateCostForTimeRange(
-        optimal.start_minutes,
-        optimal.finish_minutes,
-        kwh_needed
-      );
-    } else {
-      // v1.1.0 behavior
-      cost_info = calculateScheduledChargeCost();
-    }
-    
-    message += "Cost: £" + cost_info.total_cost.toFixed(2);
+    var message = "Plugged in at " + soc.toFixed(0) + "%. Will charge to " + target + "% during " + window_str + ".\n";
+    message += "Need " + kwh_needed.toFixed(1) + " kWh (~" + charge_hours.toFixed(1) + "h).\n";
+    message += "Est. cost: £" + cost_info.total_cost.toFixed(2);
     
     if (cost_info.has_overflow) {
-      message += "\n";
+      message += " ⚠️\n";
       if (cost_info.pre_window_kwh > 0) {
-        message += "PRE: £" + cost_info.pre_window_cost.toFixed(2) + ", ";
+        message += "PRE-WINDOW: " + cost_info.pre_window_kwh.toFixed(1) + " kWh @ £" + cost_info.pre_window_cost.toFixed(2) + "\n";
       }
-      message += "CHEAP: £" + cost_info.cheap_window_cost.toFixed(2);
+      if (cost_info.cheap_window_kwh > 0) {
+        message += "CHEAP: " + cost_info.cheap_window_kwh.toFixed(1) + " kWh @ £" + cost_info.cheap_window_cost.toFixed(2) + "\n";
+      }
       if (cost_info.post_window_kwh > 0) {
-        message += ", POST: £" + cost_info.post_window_cost.toFixed(2);
+        message += "OVERFLOW: " + cost_info.post_window_kwh.toFixed(1) + " kWh @ £" + cost_info.post_window_cost.toFixed(2);
       }
     } else {
-      message += " (save £" + cost_info.savings.toFixed(2) + ")";
+      message += " (saving £" + cost_info.savings.toFixed(2) + ")";
     }
     
     notify(message);
@@ -919,88 +716,22 @@ exports.setCharger = function(kw) {
 };
 
 /**
- * Set ready-by time (when vehicle must be charged by)
- * @param hour - Hour (0-23)
- * @param minute - Minute (0-59)
- * Set to 0:0 to disable (use v1.1.0 behavior)
- */
-exports.setReadyBy = function(hour, minute) {
-  var h = parseInt(hour);
-  var m = parseInt(minute);
-  
-  // Validate inputs
-  if (isNaN(h) || h < 0 || h > 23) {
-    return "Error: Hour must be 0-23";
-  }
-  if (isNaN(m) || m < 0 || m > 59) {
-    return "Error: Minute must be 0-59";
-  }
-  
-  setConfig("ready_by_hour", h);
-  setConfig("ready_by_minute", m);
-  
-  var msg;
-  if (h === 0 && m === 0) {
-    msg = "Ready-by time DISABLED - will start at cheap window";
-  } else {
-    msg = "Ready-by time: " + formatTime(h, m);
-  }
-  
-  print(msg + "\n");
-  notify(msg);
-  return msg;
-};
-
-/**
- * Clear ready-by time (disable feature)
- */
-exports.clearReadyBy = function() {
-  return exports.setReadyBy(0, 0);
-};
-
-/**
  * Enable scheduled charging (wait for cheap window)
- * @deprecated Use useSchedule() for clarity
  */
 exports.enable = function() {
   OvmsConfig.Set("usr", "charging.enabled", "true");
-  var msg = "Scheduled charging ENABLED - will wait for cheap window\n(Note: Consider using charging.useSchedule() for clarity)";
+  var msg = "Scheduled charging ENABLED - will wait for cheap window";
   print(msg + "\n");
-  notify("Scheduled charging ENABLED");
+  notify(msg);
   return msg;
 };
 
 /**
  * Disable scheduled charging (charge immediately on plug-in)
- * @deprecated Use chargeNow() for clarity
  */
 exports.disable = function() {
   OvmsConfig.Set("usr", "charging.enabled", "false");
-  var msg = "Scheduled charging DISABLED - will charge immediately on plug-in\n(Note: Consider using charging.chargeNow() for clarity)";
-  print(msg + "\n");
-  notify("Scheduled charging DISABLED");
-  return msg;
-};
-
-/**
- * Use scheduled charging (wait for cheap window or optimal start time)
- * Replaces enable() with clearer naming
- */
-exports.useSchedule = function() {
-  OvmsConfig.Set("usr", "charging.enabled", "true");
-  var msg = "Using scheduled charging - will wait for optimal time";
-  print(msg + "\n");
-  notify(msg);
-  return msg;
-};
-
-/**
- * Charge now (override schedule, charge immediately)
- * Replaces disable() with clearer naming
- */
-exports.chargeNow = function() {
-  OvmsConfig.Set("usr", "charging.enabled", "false");
-  var msg = "Charging immediately - schedule overridden";
+  var msg = "Scheduled charging DISABLED - will charge immediately on plug-in";
   print(msg + "\n");
   notify(msg);
   return msg;
@@ -1068,18 +799,9 @@ exports.status = function() {
   lines.push("");
   lines.push("Scheduling:");
   if (isSchedulingEnabled()) {
-    lines.push("  Mode: Scheduled");
+    lines.push("  Mode: Scheduled (wait for cheap window)");
     lines.push("  Cheap window: " + formatTime(start_h, start_m) + " - " + formatTime(end_h, end_m));
     lines.push("  In window now: " + (isWithinWindow() ? "Yes" : "No"));
-    
-    // Show ready-by configuration
-    var ready_h = parseInt(getConfig("ready_by_hour")) || 0;
-    var ready_m = parseInt(getConfig("ready_by_minute")) || 0;
-    if (ready_h === 0 && ready_m === 0) {
-      lines.push("  Ready-by: DISABLED (start at window start)");
-    } else {
-      lines.push("  Ready-by: " + formatTime(ready_h, ready_m));
-    }
   } else {
     lines.push("  Mode: Immediate (charge on plug-in)");
   }
@@ -1093,141 +815,36 @@ exports.status = function() {
   // Add cost estimate if plugged in and below target
   if (plugged && soc < target && isSchedulingEnabled()) {
     lines.push("");
+    lines.push("Cost Estimate:");
     
-    // Calculate optimal start
-    var optimal = calculateOptimalStart();
+    var cost_info = calculateScheduledChargeCost();
     var kwh_needed = battery.effective_capacity * (target - soc) / 100;
     var charger_rate = parseFloat(getConfig("charger_rate"));
     var charge_hours = kwh_needed / charger_rate;
     
-    if (optimal.ready_by_enabled) {
-      lines.push("Ready-By Schedule:");
-      
-      var start_time = formatTime(
-        Math.floor(optimal.start_minutes / 60) % 24,
-        Math.floor(optimal.start_minutes % 60)
-      );
-      var finish_time = formatTime(
-        Math.floor(optimal.finish_minutes / 60) % 24,
-        Math.floor(optimal.finish_minutes % 60)
-      );
-      
-      lines.push("  Will start: " + start_time);
-      lines.push("  Will finish: " + finish_time);
-      
-      if (optimal.reason === "early_start_required") {
-        var early_minutes = start_h * 60 + start_m - optimal.start_minutes;
-        var early_hours = early_minutes / 60;
-        lines.push("  ⚠️ Early start: " + early_hours.toFixed(1) + "h before window");
-      } else {
-        lines.push("  ✅ Can start at window start");
+    lines.push("  Need: " + kwh_needed.toFixed(1) + " kWh (~" + charge_hours.toFixed(1) + "h @ " + charger_rate.toFixed(1) + "kW)");
+    lines.push("  Total cost: £" + cost_info.total_cost.toFixed(2));
+    
+    if (cost_info.has_overflow) {
+      lines.push("  ⚠️ WARNING: Will extend past window end");
+      if (cost_info.cheap_window_kwh > 0) {
+        lines.push("    Cheap: " + cost_info.cheap_window_kwh.toFixed(1) + " kWh @ £" + cost_info.cheap_window_cost.toFixed(2));
       }
-      
-      lines.push("");
-      lines.push("Cost Estimate:");
-      lines.push("  Need: " + kwh_needed.toFixed(1) + " kWh (~" + charge_hours.toFixed(1) + "h @ " + charger_rate.toFixed(1) + "kW)");
-      
-      // Calculate cost with optimal timing
-      var cost_info = calculateCostForTimeRange(
-        optimal.start_minutes,
-        optimal.finish_minutes,
-        kwh_needed
-      );
-      
-      lines.push("  Total cost: £" + cost_info.total_cost.toFixed(2));
-      
-      if (cost_info.has_overflow) {
-        if (cost_info.pre_window_kwh > 0) {
-          lines.push("    PRE: " + cost_info.pre_window_kwh.toFixed(1) + " kWh @ £" + cost_info.pre_window_cost.toFixed(2));
-        }
-        if (cost_info.cheap_window_kwh > 0) {
-          lines.push("    CHEAP: " + cost_info.cheap_window_kwh.toFixed(1) + " kWh @ £" + cost_info.cheap_window_cost.toFixed(2));
-        }
-        if (cost_info.post_window_kwh > 0) {
-          lines.push("    POST: " + cost_info.post_window_kwh.toFixed(1) + " kWh @ £" + cost_info.post_window_cost.toFixed(2));
-        }
-      } else {
-        lines.push("  ✅ All in cheap window");
-        lines.push("  Saving: £" + cost_info.savings.toFixed(2) + " vs standard rate");
+      if (cost_info.post_window_kwh > 0) {
+        lines.push("    Overflow: " + cost_info.post_window_kwh.toFixed(1) + " kWh @ £" + cost_info.post_window_cost.toFixed(2));
       }
     } else {
-      // v1.1.0 mode
-      lines.push("Cost Estimate:");
-      
-      var cost_info = calculateScheduledChargeCost();
-      
-      lines.push("  Need: " + kwh_needed.toFixed(1) + " kWh (~" + charge_hours.toFixed(1) + "h @ " + charger_rate.toFixed(1) + "kW)");
-      lines.push("  Total cost: £" + cost_info.total_cost.toFixed(2));
-      
-      if (cost_info.has_overflow) {
-        lines.push("  ⚠️ WARNING: Will extend past window end");
-        if (cost_info.cheap_window_kwh > 0) {
-          lines.push("    Cheap: " + cost_info.cheap_window_kwh.toFixed(1) + " kWh @ £" + cost_info.cheap_window_cost.toFixed(2));
-        }
-        if (cost_info.post_window_kwh > 0) {
-          lines.push("    Overflow: " + cost_info.post_window_kwh.toFixed(1) + " kWh @ £" + cost_info.post_window_cost.toFixed(2));
-        }
-      } else {
-        lines.push("  ✅ Will complete in cheap window");
-        lines.push("  Saving: £" + cost_info.savings.toFixed(2) + " vs standard rate");
-      }
+      lines.push("  ✅ Will complete in cheap window");
+      lines.push("  Saving: £" + cost_info.savings.toFixed(2) + " vs standard rate");
     }
   }
   
   var output = lines.join("\n");
   print(output + "\n");
   
-  // Send SHORT summary as notification (full output too long)
-  var summary = "Smart Charging v" + VERSION + "\n";
-  summary += "SOC: " + soc.toFixed(0) + "% → " + target + "%\n";
-  summary += "Plugged: " + (plugged ? "Yes" : "No") + ", Charging: " + (charging ? "Yes" : "No") + "\n";
-  summary += "Mode: " + (isSchedulingEnabled() ? "Scheduled" : "Immediate");
-  
-  if (plugged && soc < target && isSchedulingEnabled()) {
-    // Check if ready-by is enabled
-    var ready_h = parseInt(getConfig("ready_by_hour")) || 0;
-    var ready_m = parseInt(getConfig("ready_by_minute")) || 0;
-    
-    if (ready_h !== 0 || ready_m !== 0) {
-      // Ready-by mode - show timing
-      var optimal = calculateOptimalStart();
-      
-      var start_time = formatTime(
-        Math.floor(optimal.start_minutes / 60) % 24,
-        Math.floor(optimal.start_minutes % 60)
-      );
-      var finish_time = formatTime(
-        Math.floor(optimal.finish_minutes / 60) % 24,
-        Math.floor(optimal.finish_minutes % 60)
-      );
-      
-      summary += "\nStart: " + start_time + ", Finish: " + finish_time;
-      
-      // Calculate cost with optimal timing
-      var cost_info = calculateCostForTimeRange(
-        optimal.start_minutes,
-        optimal.finish_minutes,
-        optimal.kwh_needed
-      );
-      
-      summary += "\nCost: £" + cost_info.total_cost.toFixed(2);
-      if (cost_info.has_overflow) {
-        summary += " (PRE+CHEAP+POST)";
-      }
-    } else {
-      // v1.1.0 mode - no ready-by
-      var cost_info = calculateScheduledChargeCost();
-      summary += "\nCost: £" + cost_info.total_cost.toFixed(2);
-      if (cost_info.has_overflow) {
-        summary += " ⚠️ Overflow";
-      } else {
-        summary += " (save £" + cost_info.savings.toFixed(2) + ")";
-      }
-    }
-  }
-  
+  // Send FULL output as notification so it appears in app
   try {
-    OvmsNotify.Raise("info", "charge.smart", summary);
+    OvmsNotify.Raise("info", "charge.smart", output);
   } catch (e) {
     // Notification failed
   }
