@@ -1,6 +1,6 @@
 # OVMS Smart Charging System
 
-**Current Version:** v1.2.1 (2025-11-27)  
+**Current Version:** v1.3.5 (2025-12-06)  
 **Status:** Production - Real-world tested ✅  
 **Vehicle:** Nissan ENV200 / Leaf  
 **OVMS:** v3 Module  
@@ -19,49 +19,126 @@ Automatically schedules EV charging to:
 
 ---
 
-## 🆕 What's New in v1.2.1
+## 🆕 What's New in v1.3.5
 
-### Bug Fix: State-Aware Status Display
-**Problem:** Status showed stale predictions during active charging  
-**Solution:** Now detects PLANNING / ACTIVE / COMPLETED states and shows appropriate info
+### Bug Fix: Decimal Time Display
+**Problem:** Notifications showed times like "04:48.86800573888104"  
+**Solution:** Added Math.round() to finish_minutes calculations
 
-**Example:**
+**Result:**
 ```
-Before charging (PLANNING):
-  Start: 22:15, Finish: 08:00
-
-While charging (ACTIVE):
-  Started: 22:17, Est. finish: 06:30
-
-After charging (COMPLETED):
-  Completed! Started: 22:17
+Before: Expected: 23:33 -> 04:48.86800573888104
+After:  Expected: 23:33 -> 04:49
 ```
 
-### Improvement: Adjusted Charger Rate
-- Changed default from 1.8kW to 2.0kW based on real-world data
-- Fixes 10% over-estimation of charge time
-- User feedback: "closer to 2 over longer charge cycles" ✅
+### Bug Fix: Midnight-Crossing Cost Calculation
+**Problem:** Charging from 23:33 -> 04:40 showed all kWh as "pre-window"  
+**Solution:** Fixed overlap logic when charge sessions cross midnight
+
+**Result:**
+```
+Before: Pre-window (before 23:30): £2.67 (9.2 kWh)
+        Cheap (23:30-05:30): £0.00 (0.0 kWh)
+
+After:  Cheap (23:30-05:30): £0.64 (9.2 kWh)
+```
+
+**Affects:** Both real-time notifications AND status() command output
 
 ---
 
 ## 📦 Installation
 
-### Quick Install
+### Quick Install via Web Interface (Recommended)
+
+1. **Access OVMS Web Interface**
+   - Connect to your OVMS WiFi network (default: OVMS)
+   - Navigate to: http://192.168.4.1 (or your configured IP)
+   - Login with your credentials
+
+2. **Upload Script**
+   - Go to: Tools → Editor
+   - Navigate to: /store/scripts/lib/
+   - Upload charging-v1_3_5.js
+   - Rename to: charging.js
+
+3. **Enable Autocharge**
+   - Go to: Config → Vehicle
+   - Find: "autocharge" setting
+   - Set to: "yes"
+   - Save configuration
+
+4. **Reload Scripts**
+   - Go to: Tools → Shell
+   - Run: `script reload`
+   - Verify: `script eval "charging.version()"`
+   - Should show: v1.3.5 (2025-12-06)
+
+5. **Configure Auto-Load (Important!)**
+   - Go to: Tools → Editor
+   - Navigate to: /store/scripts/
+   - Edit or create: ovmsmain.js
+   - Add this code:
+   
+   ```javascript
+   // Load the smart charging module
+   charging = require("lib/charging");
+   
+   // Optional: Load ABRP telemetry (only if you have abrp.js installed)
+   // abrp = require("lib/abrp");
+   // abrp.send(1)
+   
+   // Optional: Configure charging on startup
+   // Uncomment and modify these lines to set defaults:
+   // charging.setChargerRate(2.0);     // Set your charger's kW rating
+   // charging.setTarget(85);            // Target SOC 85%
+   // charging.setReadyBy(8, 30);        // Ready by 8:30 AM
+   
+   print("OVMS initialization complete\n");
+   ```
+   
+   - Save the file
+   - This ensures the script loads automatically on every boot
+
+### Alternative: SSH Install
 
 ```bash
-# Upload to OVMS
-scp charging-v1_2_1-WIP.js root@<your-ovms-ip>:/store/scripts/lib/charging.js
+# Upload to OVMS (replace with your OVMS IP)
+scp charging-v1_3_5.js root@192.168.4.1:/store/scripts/lib/charging.js
+
+# SSH to OVMS
+ssh root@192.168.4.1
 
 # Enable autocharge (CRITICAL!)
-ssh root@<your-ovms-ip>
 config set xnl autocharge yes
 
-# Reload script
+# Create/edit ovmsmain.js for auto-load
+# Use 'vi /store/scripts/ovmsmain.js' or upload via web interface
+
+# Reload scripts
 script reload
 
 # Verify
 script eval "charging.version()"
-# Should show: v1.2.1 (2025-11-27)
+# Should show: v1.3.5 (2025-12-06)
+```
+
+**ovmsmain.js contents:**
+```javascript
+// Load the smart charging module
+charging = require("lib/charging");
+
+// Optional: Load ABRP telemetry (only if you have abrp.js installed)
+// abrp = require("lib/abrp");
+// abrp.send(1)
+
+// Optional: Configure charging on startup
+// Uncomment and modify these lines to set defaults:
+// charging.setChargerRate(2.0);     // Set your charger's kW rating
+// charging.setTarget(85);            // Target SOC 85%
+// charging.setReadyBy(8, 30);        // Ready by 8:30 AM
+
+print("OVMS initialization complete\n");
 ```
 
 ### Configuration
@@ -73,7 +150,7 @@ charging.setTarget(80)  // or 90, 95, 100 - whatever you prefer
 // Set cheap rate window (default: 23:30-05:30)
 charging.setWindow(23,30,5,30)
 
-// Set ready-by time (NEW in v1.2.0!)
+// Set ready-by time
 charging.setReadyBy(8,30)  // Must be charged by 08:30
 
 // Set charger rate (default: 2.0kW in v1.2.1)
@@ -127,11 +204,11 @@ charging.status()
 
 ## 💡 Key Features
 
-### 🎯 Native OVMS SOC Control (v1.2.0 Breakthrough!)
+### 🎯 Native OVMS SOC Control (v1.2.0)
 - Uses `config set xnl autocharge yes` + `suffsoc <target>`
 - OVMS monitors SOC and stops automatically
 - **Perfect accuracy:** ±1% of target SOC
-- No custom monitoring needed!
+- No custom monitoring needed
 
 ### ⏰ Ready-By Time Optimization (v1.2.0)
 - Specify deadline: "Must be charged by 08:30"
@@ -144,9 +221,9 @@ charging.status()
 - Shows potential savings
 
 ### 📱 Notifications
-- Plug-in detection with schedule
+- Plug-in detection with schedule sent to OVMS Connect app
 - Charge start/stop confirmations
-- State-aware status (v1.2.1!)
+- State-aware status (v1.2.1)
 - Cost estimates
 
 ---
@@ -219,16 +296,16 @@ charging.version()            // Show version
 
 ## ⚠️ Known Limitations
 
-### Current (v1.2.1)
-- Charger rate is fixed (2.0kW default) - doesn't adapt to actual measured rate
-- Status shows "est. remaining" cost during charging - not actual spent so far
-- Completed mode doesn't show final cost or actual finish time
+### Current (v1.3.5)
+- Charger rate adapts from measured sessions (v1.3.0+) but takes one session to learn
+- Cost display during active charging shows estimate to completion, not actual spent
+- Requires manual configuration of tariff rates (no automatic tariff updates)
 
 ### Design Constraints
-- Requires Nissan ENV200/Leaf with OVMS v3
-- Designed for Intelligent Octopus Go tariff (UK)
+- Requires Nissan ENV200/Leaf with OVMS v3 module
+- Designed for time-of-use tariffs (tested with UK Intelligent Octopus Go)
 - Must have `config set xnl autocharge yes` enabled
-- Fixed cheap rate window (no dynamic adjustment)
+- Fixed cheap rate window (configure once, doesn't auto-adjust for DST)
 
 ---
 
@@ -245,13 +322,19 @@ charging.version()            // Show version
 - If issue persists, try: `charging.stop()` then `charging.start()`
 
 ### Status shows wrong times
-- This was fixed in v1.2.1!
+- This was fixed in v1.2.1
 - Upgrade if you're on v1.2.0 or earlier
 
 ---
 
 ## 🚦 Version History
 
+- **v1.3.5** (2025-12-06) - Fixed decimal time display, fixed midnight-crossing cost calculation
+- **v1.3.4** (2025-12-05) - Native energy tracking using v.c.kwh metric
+- **v1.3.3** (2025-12-05) - Improved command naming (scheduleOn/Off, dynamicRateOn/Off)
+- **v1.3.2** (2025-12-05) - Fixed corrupted UTF-8 characters
+- **v1.3.1** (2024-11-30) - Enhanced notifications with cost breakdowns
+- **v1.3.0** (2024-11-29) - Dynamic charge rate detection
 - **v1.2.1** (2025-11-27) - State-aware status, adjusted charger rate
 - **v1.2.0** (2025-11-26) - Ready-by time feature, native OVMS SOC control
 - **v1.1.0** - Fixed schedule mode, cost calculations
@@ -263,18 +346,20 @@ See `SMART-CHARGING-CHANGELOG.md` for detailed version history.
 
 ## 🔮 Future Roadmap
 
-### v1.3.0 (Planned)
-- Enhanced cost breakdown with time ranges
-- Complete header documentation
-- Consider: Dynamic rate detection from vehicle data
-- Consider: Running cost tracking during charging
+### Under Consideration
+- Running cost estimator (show actual £ spent during active charge)
+- Integration with solar generation data
+- Weather-based charging adjustments
+- Support for multiple tariffs/rate schedules
 
-### Deferred
-- Low battery reminder alerts
-- Cost minimization mode
-- Dynamic window adjustment
-- Historical tracking
-- Multiple tariff support
+### Not Planned
+The OVMS Connect app provides excellent historical tracking including:
+- Charging session logs with energy and duration
+- Trip data with energy used/regenerated
+- Battery health monitoring over time
+- Cell-level voltage and temperature graphs
+
+These features are better suited to the OVMS Connect app rather than duplicate functionality in this script.
 
 ---
 
@@ -294,13 +379,60 @@ MIT License - Use freely, modify as needed
 
 ---
 
-## 👥 Credits
+## 👥 Credits & Resources
 
-Developed by the OVMS Community for Nissan ENV200/Leaf owners using Intelligent Octopus Go tariff.
+### OVMS Project
+This script leverages the excellent **Open Vehicle Monitoring System (OVMS)** project:
 
-Special thanks to andyorkney for extensive real-world testing and feedback.
+- **Official Website:** https://www.openvehicles.com
+- **Documentation:** https://docs.openvehicles.com/en/latest/
+- **Hardware:** https://shop.openenergymonitor.com/ovms/
+
+The OVMS v3 module provides the hardware platform for vehicle monitoring, remote control, and the native `autocharge` + `suffsoc` functionality that makes accurate SOC-based stopping possible.
+
+### pyOVMS & MQTT Infrastructure
+This script sends notifications via the OVMS MQTT infrastructure. Two excellent free MQTT broker services are available:
+
+**pyOVMS** (https://turboserv.0-c.de/dashboard)
+- Free MQTT broker and web dashboard for OVMS
+- Created by **schorle** (Carsten Schmiemann) & **Crash_Override**
+- Provides account management, vehicle configuration, and MQTT connectivity
+- Includes firmware repository and pyOVMS control panel
+- Powers the OVMS Connect app notifications
+- Community-funded via donations
+
+**Dexter's Web OVMS Server** (https://ovms.dexters-web.de)
+- Independent EU-based MQTT broker
+- Maintained by Michael Balzer (OVMS core developer)
+- Free to use, community-funded
+
+### OVMS Connect App
+The companion mobile app for viewing vehicle data and receiving notifications:
+- **Developer:** Carsten Schmiemann (schorle)
+- **Platform:** iOS & Android
+- **Features:** Real-time telemetry, charging logs, trip tracking, console access
+- **Notifications:** Requires connection to MQTT broker (pyOVMS or Dexter's server)
+
+### Smart Charging Script
+**Author:** andyorkney  
+**Development Assistant:** Claude (Anthropic)  
+**License:** MIT
+
+Developed for Nissan ENV200/Leaf owners using time-of-use electricity tariffs (UK Intelligent Octopus Go).
+
+**Development Motivation:**
+
+This project served multiple purposes: adding missing smart charging functionality to the vehicle via the OVMS module, developing JavaScript knowledge and skills, and learning to work effectively in partnership with Claude AI. 
+
+The collaborative development process has been a genuine learning experience - with frustrations, breakthroughs, debugging sessions, and the gradual development of effective communication patterns between human and AI. Working together requires patience, clear communication, and mutual understanding of each other's strengths and limitations. The technical skills gained in OVMS scripting are matched by insights into how to collaborate productively with AI tools.
+
+**Special thanks to:**
+- **OVMS core developers** - Creating the platform and native charge control features that make this possible
+- **schorle & Crash_Override** - pyOVMS infrastructure and OVMS Connect app
+- **Michael Balzer** - Dexter's OVMS server and vehicle support contributions
+- **OVMS community** - Testing, feedback, and support
 
 ---
 
-**Last updated:** 2025-11-27  
+**Last updated:** 2025-12-06  
 **Maintained by:** OVMS Community

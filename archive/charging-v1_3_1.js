@@ -1,70 +1,8 @@
 /**
- * OVMS Smart Charging System v1.3.5
+ * OVMS Smart Charging System v1.3.0
  * 
  * PURPOSE: Schedule charging during cheap electricity rate window,
  *          stop automatically at target SOC using native OVMS control.
- * 
- * NEW IN v1.3.5:
- * - Fixed decimal time display in notifications (e.g., 04:48.868... now shows 04:49)
- * - Fixed midnight-crossing cost calculation (23:33 -> 04:40 now calculates correctly)
- * - Affects both real-time notifications and status() command output
- * 
- * NEW IN v1.3.4:
- * - Use native v.c.kwh metric for energy tracking (more accurate than SOC calculation)
- * - Fallback to SOC-based calculation if v.c.kwh unavailable
- * - Improved accuracy: uses actual measured energy vs estimated from SOC
- * - Simplifies code by leveraging OVMS built-in session tracking
- * 
- * NEW IN v1.3.3:
- * - Improved command naming for clarity
- * - Added: scheduleOn() / scheduleOff() (clearer than useSchedule/chargeNow)
- * - Added: dynamicRateOn() / dynamicRateOff() (clearer than useMeasuredRate)
- * - Added: setChargerRate() (clearer than setCharger)
- * - Removed: useSchedule() and chargeNow() (confusing names)
- * - Kept: enable/disable as aliases for backwards compatibility
- * 
- * AVAILABLE COMMANDS:
- * 
- * Setup & Configuration:
- *   script eval "charging.setTarget(80)"              - Set target SOC (20-100%)
- *   script eval "charging.setWindow(23,30,5,30)"      - Set cheap rate window
- *   script eval "charging.setRates(0.07, 0.292)"      - Set electricity rates (£/kWh)
- *   script eval "charging.setChargerRate(2.0)"        - Set charger power rating (kW)
- *   script eval "charging.setReadyBy(8,30)"           - Set ready-by deadline
- *   script eval "charging.clearReadyBy()"             - Disable ready-by feature
- * 
- * Scheduling Mode:
- *   script eval "charging.scheduleOn()"               - Enable scheduled charging
- *   script eval "charging.scheduleOff()"              - Disable (charge on plug-in)
- *   script eval "charging.enable()"                   - Alias for scheduleOn()
- *   script eval "charging.disable()"                  - Alias for scheduleOff()
- * 
- * Dynamic Rate Detection:
- *   script eval "charging.dynamicRateOn()"            - Enable measured rate learning
- *   script eval "charging.dynamicRateOff()"           - Use configured rate only
- *   script eval "charging.setMeasuredRate(2.5)"       - Manually set measured rate
- *   script eval "charging.clearMeasuredRate()"        - Clear measured rate
- * 
- * Manual Control:
- *   script eval "charging.start()"                    - Force start charging now
- *   script eval "charging.stop()"                     - Stop charging
- * 
- * Information:
- *   script eval "charging.status()"                   - Show full system status
- *   script eval "charging.version()"                  - Show version number
- * 
- * Advanced:
- *   script eval "charging.init()"                     - Manual initialization
- * 
- * NEW IN v1.3.2:
- * - Fixed corrupted UTF-8 characters (arrow and £ symbols)
- * - All other functionality identical to v1.3.1
- * 
- * NEW IN v1.3.1:
- * - Enhanced notifications with clear start -> finish times
- * - Actual cost calculations on charge completion
- * - Cost breakdown (cheap vs standard rate) when overflow occurs
- * - Enables cost tracking and ROI analysis for faster chargers
  * 
  * NEW IN v1.3.0:
  * - Dynamic charge rate detection (learns actual rate from sessions)
@@ -74,7 +12,7 @@
  * 
  * NEW IN v1.2.1:
  * - State-aware status display (planning/active/completed modes)
- * - Adjusted charger rate default (1.8kW  ->  2.0kW based on real-world data)
+ * - Adjusted charger rate default (1.8kW -> 2.0kW based on real-world data)
  * - Bug fix: Status now shows accurate timing during active charging
  * 
  * NEW IN v1.2.0:
@@ -114,8 +52,8 @@
 // VERSION INFO
 // ============================================================================
 
-var VERSION = "1.3.5";
-var BUILD_DATE = "2025-12-06";
+var VERSION = "1.3.1";
+var BUILD_DATE = "2025-11-30";
 
 // ============================================================================
 // CONFIGURATION PARAMETERS
@@ -327,7 +265,8 @@ function formatDuration(minutes) {
 }
 
 /**
- * Format time range as "HH:MM -> HH:MM (duration)"
+ * Format time range as "HH:MM -> HH:MM (duration)"  
+ * Uses ASCII arrow for OVMS app compatibility
  * @param {number} start_minutes - Start time in minutes since midnight
  * @param {number} end_minutes - End time in minutes since midnight
  * @returns {string} Formatted time range (e.g., "23:30 -> 04:00 (4h 30m)")
@@ -441,7 +380,7 @@ function startRateTracking() {
   chargingMetrics.session_active = true;
   chargingMetrics.session_start_time = now;
   chargingMetrics.session_start_soc = soc;
-  chargingMetrics.session_start_minutes = getCurrentMinuteOfDay(); // v1.3.1: Track start time for notification
+  chargingMetrics.session_start_minutes = getCurrentMinuteOfDay(); // v1.3.1: For notifications
   chargingMetrics.soc_checkpoints = [];
   chargingMetrics.last_checkpoint_time = now;
   
@@ -509,20 +448,8 @@ function calculateAndStoreSessionRate() {
     return;
   }
   
-  // v1.3.4: Use native OVMS energy tracking (more accurate than SOC calculation)
-  var kwh_delivered = OvmsMetrics.AsFloat("v.c.kwh");
-  var using_native_metric = true;
-  
-  // Fallback to SOC-based calculation if native metric unavailable or invalid
-  if (isNaN(kwh_delivered) || kwh_delivered <= 0) {
-    var battery = getBatteryParams();
-    kwh_delivered = (soc_gained / 100) * battery.effective_capacity;
-    using_native_metric = false;
-    print("[RATE] Using SOC-based energy calculation (v.c.kwh unavailable)\n");
-  } else {
-    print("[RATE] Using native v.c.kwh metric: " + kwh_delivered.toFixed(1) + " kWh\n");
-  }
-  
+  var battery = getBatteryParams();
+  var kwh_delivered = (soc_gained / 100) * battery.effective_capacity;
   var measured_rate = kwh_delivered / duration_hours;
   
   // Sanity check: Rate should be reasonable (0.5kW - 25kW)
@@ -538,7 +465,7 @@ function calculateAndStoreSessionRate() {
   print("[RATE] Session complete:\n");
   print("  Duration: " + duration_hours.toFixed(1) + "h\n");
   print("  SOC gained: " + soc_gained.toFixed(1) + "% (" + 
-        chargingMetrics.session_start_soc.toFixed(1) + "%  ->  " + 
+        chargingMetrics.session_start_soc.toFixed(1) + "% -> " + 
         final_soc.toFixed(1) + "%)\n");
   print("  Energy: " + kwh_delivered.toFixed(1) + " kWh\n");
   print("  Measured rate: " + measured_rate.toFixed(2) + " kW\n");
@@ -568,7 +495,7 @@ function calculateAndStoreSessionRate() {
     var overflow_minutes = session_end_minutes - window_end;
     if (overflow_minutes < 0) overflow_minutes += 1440;
     if (overflow_minutes > 0) {
-      message += "\n(!) Extended " + formatDuration(overflow_minutes) + " past window";
+      message += "\n(!!) Extended " + formatDuration(overflow_minutes) + " past window";
     }
   }
   
@@ -672,16 +599,9 @@ function calculateCostForTimeRange(start_minutes, end_minutes, kwh_needed) {
   var pre_window_minutes = 0;
   var post_window_minutes = 0;
   
-  // v1.3.5: Fixed midnight-crossing logic
-  // Normalize charge times
-  var charge_start = start_minutes;
+  // Normalize times: keep everything in 0-1440 range for same-day, or allow >1440 for next-day
+  var charge_start = start_minutes % (24 * 60);
   var charge_duration = end_minutes - start_minutes;
-  
-  // If charge crosses midnight, normalize properly
-  if (charge_duration < 0) {
-    charge_duration += (24 * 60);  // Add 24 hours to duration
-  }
-  
   var charge_end = charge_start + charge_duration;
   
   // Window times
@@ -693,16 +613,9 @@ function calculateCostForTimeRange(start_minutes, end_minutes, kwh_needed) {
     win_end += (24 * 60);
   }
   
-  // If charge crosses midnight (end is before start in clock time), extend charge_end
-  if (charge_end > (24 * 60)) {
-    // Charge extends into next day
-    // Also need to check if window is same-day or crosses midnight
-    if (win_end < (24 * 60)) {
-      // Window is same-day but charge crosses midnight
-      // Need to shift window forward a day for comparison
-      win_start += (24 * 60);
-      win_end += (24 * 60);
-    }
+  // If charge crosses midnight, extend charge_end into next day  
+  if (charge_end > (24 * 60) || (charge_end < charge_start && charge_duration > 0)) {
+    // Charge extends into next day - already handled by charge_end = charge_start + duration
   }
   
   // Calculate overlap between [charge_start, charge_end] and [win_start, win_end]
@@ -812,25 +725,7 @@ function startCharging() {
   OvmsCommand.Exec("config set xnl suffsoc " + target);
   OvmsCommand.Exec("charge start");
   
-  // v1.3.1: Enhanced charge start notification
-  var soc = getSOC();
-  var battery = getBatteryParams();
-  var kwh_needed = battery.effective_capacity * (target - soc) / 100;
-  var charger_rate = getEffectiveChargeRate();
-  var charge_hours = kwh_needed / charger_rate;
-  var now_minutes = getCurrentMinuteOfDay();
-  var finish_minutes = now_minutes + Math.round(charge_hours * 60);  // v1.3.5: Round to prevent decimals
-  
-  var message = "Charging started (manual)\n";
-  message += "From: " + soc.toFixed(0) + "% -> To: " + target + "%\n";
-  message += "Expected: " + formatTimeRange(now_minutes, finish_minutes) + "\n";
-  message += "Energy: " + kwh_needed.toFixed(1) + " kWh @ " + charger_rate.toFixed(1) + "kW\n";
-  
-  var cost_info = calculateCostForTimeRange(now_minutes, finish_minutes, kwh_needed);
-  var cost_breakdown = formatCostBreakdown(cost_info, true);
-  message += cost_breakdown;
-  
-  notify(message);
+  notify("Charging started. Target " + target + "% (OVMS will stop automatically)");
   
   state.scheduled_charge_active = true;
 }
@@ -898,7 +793,7 @@ function calculateOptimalStart() {
   if (isNaN(charger_rate) || charger_rate === 0) charger_rate = 2.0;
   
   var charge_hours = kwh_needed / charger_rate;
-  var charge_minutes = Math.round(charge_hours * 60);  // Round to integer minutes
+  var charge_minutes = charge_hours * 60;
   
   // When is the deadline?
   var ready_by_minutes = timeToMinutes(ready_hour, ready_minute);
@@ -1062,38 +957,7 @@ function checkSchedule() {
   OvmsCommand.Exec("config set xnl suffsoc " + target);
   OvmsCommand.Exec("charge start");
   
-  // v1.3.1: Enhanced scheduled charge start notification
-  var soc = getSOC();
-  var battery = getBatteryParams();
-  var kwh_needed = battery.effective_capacity * (target - soc) / 100;
-  var charger_rate = getEffectiveChargeRate();
-  var charge_hours = kwh_needed / charger_rate;
-  var now_minutes = getCurrentMinuteOfDay();
-  var finish_minutes = now_minutes + Math.round(charge_hours * 60);  // v1.3.5: Round to prevent decimals
-  
-  var message = "Charging started (scheduled)\n";
-  message += "From: " + soc.toFixed(0) + "% -> To: " + target + "%\n";
-  message += "Expected: " + formatTimeRange(now_minutes, finish_minutes) + "\n";
-  message += "Energy: " + kwh_needed.toFixed(1) + " kWh @ " + charger_rate.toFixed(1) + "kW\n";
-  
-  var cost_info = calculateCostForTimeRange(now_minutes, finish_minutes, kwh_needed);
-  var cost_breakdown = formatCostBreakdown(cost_info, true);
-  message += cost_breakdown;
-  
-  // Add overflow warning if needed
-  if (cost_info.has_overflow) {
-    var cheap_end_hour = parseInt(getConfig("cheap_end_hour")) || 5;
-    var cheap_end_minute = parseInt(getConfig("cheap_end_minute")) || 30;
-    var window_end = cheap_end_hour * 60 + cheap_end_minute;
-    
-    var overflow_minutes = finish_minutes - window_end;
-    if (overflow_minutes < 0) overflow_minutes += 1440;
-    if (overflow_minutes > 0) {
-      message += "\n(!) Expected to extend " + formatDuration(overflow_minutes) + " past window";
-    }
-  }
-  
-  notify(message);
+  notify("Charging started (scheduled). Target " + target + "%");
   state.scheduled_charge_active = true;
   
   // v1.3.0: Start rate tracking
@@ -1162,24 +1026,40 @@ function onPlugIn() {
     var charger_rate = getEffectiveChargeRate(); // v1.3.0: CHANGED
     var charge_hours = kwh_needed / charger_rate;
     
-    // v1.3.1: Enhanced plug-in notification with clear start -> finish times
-    var message = "Plugged in at " + soc.toFixed(0) + "%\n";
-    message += "Target: " + target + "%";
+    var message = "Plugged in at " + soc.toFixed(0) + "%.";
     
     if (optimal.ready_by_enabled) {
+      // Ready-by mode - show timing details
       var ready_time = formatTime(
         Math.floor(optimal.ready_by_minutes / 60) % 24,
         optimal.ready_by_minutes % 60
       );
-      message += " by " + ready_time;
+      message += " Target " + target + "% by " + ready_time + ".\n";
+      
+      var start_time = formatTime(
+        Math.floor(optimal.start_minutes / 60) % 24,
+        Math.floor(optimal.start_minutes % 60)
+      );
+      
+      if (optimal.reason === "early_start_required") {
+        var early_minutes = start_hour * 60 + start_minute - optimal.start_minutes;
+        var early_hours = early_minutes / 60;
+        message += "Will start at " + start_time + " (" + early_hours.toFixed(1) + "h before window).\n";
+      } else {
+        message += "Will start at " + start_time + " (window start).\n";
+      }
+      
+      var finish_time = formatTime(
+        Math.floor(optimal.finish_minutes / 60) % 24,
+        Math.floor(optimal.finish_minutes % 60)
+      );
+      message += "Finish ~" + finish_time + ".";
+    } else {
+      // v1.1.0 mode (no ready-by)
+      message += " Will charge to " + target + "% during " + window_str + ".";
     }
-    message += "\n";
     
-    // Add time range using new helper
-    message += "Expected: " + formatTimeRange(optimal.start_minutes, optimal.finish_minutes) + "\n";
-    
-    // Add energy info
-    message += "Energy: " + kwh_needed.toFixed(1) + " kWh @ " + charger_rate.toFixed(1) + "kW\n";
+    message += " Need " + kwh_needed.toFixed(1) + " kWh (~" + charge_hours.toFixed(1) + "h).\n";
     
     // Calculate costs using optimal timing
     var cost_info;
@@ -1194,33 +1074,19 @@ function onPlugIn() {
       cost_info = calculateScheduledChargeCost();
     }
     
-    // Add cost breakdown using new helper
-    var cost_breakdown = formatCostBreakdown(cost_info, true);
-    message += cost_breakdown;
+    message += "Cost: £" + cost_info.total_cost.toFixed(2);
     
-    // Add overflow warning if needed
     if (cost_info.has_overflow) {
-      var start_hour = parseInt(getConfig("cheap_start_hour")) || 23;
-      var start_minute = parseInt(getConfig("cheap_start_minute")) || 30;
-      var end_hour = parseInt(getConfig("cheap_end_hour")) || 5;
-      var end_minute = parseInt(getConfig("cheap_end_minute")) || 30;
-      
-      var window_start = start_hour * 60 + start_minute;
-      var window_end = end_hour * 60 + end_minute;
-      
-      // Check if extends past window
-      if (optimal.finish_minutes > window_end && window_end > window_start) {
-        var overflow_minutes = optimal.finish_minutes - window_end;
-        message += "\n(!) Extends " + formatDuration(overflow_minutes) + " past window";
-      } else if (window_end < window_start) {
-        // Overnight window - check if finishes after window end on next day
-        var finish_normalized = optimal.finish_minutes < window_start ? optimal.finish_minutes + 1440 : optimal.finish_minutes;
-        var end_normalized = window_end + 1440;
-        if (finish_normalized > end_normalized) {
-          var overflow_minutes = finish_normalized - end_normalized;
-          message += "\n(!) Extends " + formatDuration(overflow_minutes) + " past window";
-        }
+      message += "\n";
+      if (cost_info.pre_window_kwh > 0) {
+        message += "PRE: £" + cost_info.pre_window_cost.toFixed(2) + ", ";
       }
+      message += "CHEAP: £" + cost_info.cheap_window_cost.toFixed(2);
+      if (cost_info.post_window_kwh > 0) {
+        message += ", POST: £" + cost_info.post_window_cost.toFixed(2);
+      }
+    } else {
+      message += " (save £" + cost_info.savings.toFixed(2) + ")";
     }
     
     notify(message);
@@ -1383,65 +1249,29 @@ exports.setRates = function(cheap, standard) {
 };
 
 /**
- * Set charger power rating
- * Primary command (v1.3.3: renamed from setCharger for clarity)
+ * Set charger power rating (configured)
  * v1.3.0: This becomes the fallback when no measured rate exists
  */
-exports.setChargerRate = function(kw) {
+exports.setCharger = function(kw) {
   setConfig("charger_rate", kw);
   
-  var msg = "Charger rate: " + kw + " kW";
+  var msg = "Charger rate (configured): " + kw + " kW";
   print(msg + "\n");
   notify(msg);
   return msg;
 };
 
 /**
- * Set charger power rating (alias for setChargerRate)
- * Kept for backwards compatibility
- */
-exports.setCharger = function(kw) {
-  return exports.setChargerRate(kw);
-};
-
-/**
- * Enable dynamic rate detection
- * Primary command (v1.3.3: clearer than useMeasuredRate)
- * System will learn actual charge rate from sessions
- */
-exports.dynamicRateOn = function() {
-  setConfig("use_measured_rate", true);
-  
-  var msg = "Dynamic rate detection ENABLED";
-  print(msg + "\n");
-  notify(msg);
-  return msg;
-};
-
-/**
- * Disable dynamic rate detection
- * Primary command (v1.3.3: clearer than useMeasuredRate)
- * System will use configured charger rate only
- */
-exports.dynamicRateOff = function() {
-  setConfig("use_measured_rate", false);
-  
-  var msg = "Dynamic rate detection DISABLED";
-  print(msg + "\n");
-  notify(msg);
-  return msg;
-};
-
-/**
- * Enable/disable dynamic rate detection (alias)
- * Kept for backwards compatibility
+ * v1.3.0: Enable/disable dynamic rate detection
  */
 exports.useMeasuredRate = function(enable) {
-  if (enable === true || enable === "true" || enable === "yes") {
-    return exports.dynamicRateOn();
-  } else {
-    return exports.dynamicRateOff();
-  }
+  var enabled = (enable === true || enable === "true" || enable === "yes");
+  setConfig("use_measured_rate", enabled);
+  
+  var msg = "Dynamic rate detection: " + (enabled ? "ENABLED" : "DISABLED");
+  print(msg + "\n");
+  notify(msg);
+  return msg;
 };
 
 /**
@@ -1462,7 +1292,7 @@ exports.setMeasuredRate = function(kw) {
 };
 
 /**
- * v1.3.0: Clear measured rate (force use of nameplate)
+ * v1.3.0: Clear measured rate (force use of configured)
  */
 exports.clearMeasuredRate = function() {
   setConfig("measured_rate", 0);
@@ -1515,42 +1345,50 @@ exports.clearReadyBy = function() {
 
 /**
  * Enable scheduled charging (wait for cheap window)
- * Primary command for enabling the scheduler
+ * @deprecated Use useSchedule() for clarity
  */
-exports.scheduleOn = function() {
+exports.enable = function() {
   OvmsConfig.Set("usr", "charging.enabled", "true");
-  var msg = "Scheduled charging ENABLED";
+  var msg = "Scheduled charging ENABLED - will wait for cheap window\n(Note: Consider using charging.useSchedule() for clarity)";
   print(msg + "\n");
-  notify(msg);
+  notify("Scheduled charging ENABLED");
   return msg;
 };
 
 /**
  * Disable scheduled charging (charge immediately on plug-in)
- * Primary command for disabling the scheduler
+ * @deprecated Use chargeNow() for clarity
  */
-exports.scheduleOff = function() {
+exports.disable = function() {
   OvmsConfig.Set("usr", "charging.enabled", "false");
-  var msg = "Scheduled charging DISABLED - will charge on plug-in";
+  var msg = "Scheduled charging DISABLED - will charge immediately on plug-in\n(Note: Consider using charging.chargeNow() for clarity)";
+  print(msg + "\n");
+  notify("Scheduled charging DISABLED");
+  return msg;
+};
+
+/**
+ * Use scheduled charging (wait for cheap window or optimal start time)
+ * Replaces enable() with clearer naming
+ */
+exports.useSchedule = function() {
+  OvmsConfig.Set("usr", "charging.enabled", "true");
+  var msg = "Using scheduled charging - will wait for optimal time";
   print(msg + "\n");
   notify(msg);
   return msg;
 };
 
 /**
- * Enable scheduled charging (alias for scheduleOn)
- * Kept for backwards compatibility
+ * Charge now (override schedule, charge immediately)
+ * Replaces disable() with clearer naming
  */
-exports.enable = function() {
-  return exports.scheduleOn();
-};
-
-/**
- * Disable scheduled charging (alias for scheduleOff)
- * Kept for backwards compatibility
- */
-exports.disable = function() {
-  return exports.scheduleOff();
+exports.chargeNow = function() {
+  OvmsConfig.Set("usr", "charging.enabled", "false");
+  var msg = "Charging immediately - schedule overridden";
+  print(msg + "\n");
+  notify(msg);
+  return msg;
 };
 
 /**
@@ -1622,10 +1460,10 @@ exports.status = function() {
   var effective = getEffectiveChargeRate();
   
   lines.push("Charger:");
-  lines.push("  Nameplate: " + nameplate.toFixed(1) + " kW");
+  lines.push("  Configured: " + nameplate.toFixed(1) + " kW");
   if (use_measured && measured > 0) {
     lines.push("  Measured: " + measured.toFixed(2) + " kW (last session)");
-    lines.push("  Effective: " + effective.toFixed(2) + " kW (70% measured + 30% nameplate)");
+    lines.push("  Effective: " + effective.toFixed(2) + " kW (70% measured + 30% configured)");
   } else {
     lines.push("  Dynamic rate: Learning (will update after first charge)");
   }
@@ -1683,9 +1521,9 @@ exports.status = function() {
       if (optimal.reason === "early_start_required") {
         var early_minutes = start_h * 60 + start_m - optimal.start_minutes;
         var early_hours = early_minutes / 60;
-        lines.push("  Ã¢Å¡Â Ã¯Â¸Â Early start: " + early_hours.toFixed(1) + "h before window");
+        lines.push("  âš ï¸ Early start: " + early_hours.toFixed(1) + "h before window");
       } else {
-        lines.push("  Ã¢Å“â€¦ Can start at window start");
+        lines.push("  âœ… Can start at window start");
       }
       
       lines.push("");
@@ -1712,7 +1550,7 @@ exports.status = function() {
           lines.push("    POST: " + cost_info.post_window_kwh.toFixed(1) + " kWh @ £" + cost_info.post_window_cost.toFixed(2));
         }
       } else {
-        lines.push("  Ã¢Å“â€¦ All in cheap window");
+        lines.push("  âœ… All in cheap window");
         lines.push("  Saving: £" + cost_info.savings.toFixed(2) + " vs standard rate");
       }
     } else {
@@ -1725,7 +1563,7 @@ exports.status = function() {
       lines.push("  Total cost: £" + cost_info.total_cost.toFixed(2));
       
       if (cost_info.has_overflow) {
-        lines.push("  Ã¢Å¡Â Ã¯Â¸Â WARNING: Will extend past window end");
+        lines.push("  âš ï¸ WARNING: Will extend past window end");
         if (cost_info.cheap_window_kwh > 0) {
           lines.push("    Cheap: " + cost_info.cheap_window_kwh.toFixed(1) + " kWh @ £" + cost_info.cheap_window_cost.toFixed(2));
         }
@@ -1733,7 +1571,7 @@ exports.status = function() {
           lines.push("    Overflow: " + cost_info.post_window_kwh.toFixed(1) + " kWh @ £" + cost_info.post_window_cost.toFixed(2));
         }
       } else {
-        lines.push("  Ã¢Å“â€¦ Will complete in cheap window");
+        lines.push("  âœ… Will complete in cheap window");
         lines.push("  Saving: £" + cost_info.savings.toFixed(2) + " vs standard rate");
       }
     }
@@ -1744,7 +1582,7 @@ exports.status = function() {
   
   // v1.2.1: State-aware notification (PLANNING / ACTIVE / COMPLETED)
   var summary = "Smart Charging v" + VERSION + "\n";
-  summary += "SOC: " + soc.toFixed(0) + "%  ->  " + target + "%\n";
+  summary += "SOC: " + soc.toFixed(0) + "% -> " + target + "%\n";
   summary += "Plugged: " + (plugged ? "Yes" : "No") + ", Charging: " + (charging ? "Yes" : "No") + "\n";
   summary += "Mode: " + (isSchedulingEnabled() ? "Scheduled" : "Immediate");
   
@@ -1818,7 +1656,7 @@ exports.status = function() {
       var cost_info = calculateScheduledChargeCost();
       summary += "\nCost: £" + cost_info.total_cost.toFixed(2);
       if (cost_info.has_overflow) {
-        summary += " Ã¢Å¡Â Ã¯Â¸Â Overflow";
+        summary += " âš ï¸ Overflow";
       } else {
         summary += " (save £" + cost_info.savings.toFixed(2) + ")";
       }

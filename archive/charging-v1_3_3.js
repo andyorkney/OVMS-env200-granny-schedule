@@ -1,19 +1,8 @@
 /**
- * OVMS Smart Charging System v1.3.5
+ * OVMS Smart Charging System v1.3.3
  * 
  * PURPOSE: Schedule charging during cheap electricity rate window,
  *          stop automatically at target SOC using native OVMS control.
- * 
- * NEW IN v1.3.5:
- * - Fixed decimal time display in notifications (e.g., 04:48.868... now shows 04:49)
- * - Fixed midnight-crossing cost calculation (23:33 -> 04:40 now calculates correctly)
- * - Affects both real-time notifications and status() command output
- * 
- * NEW IN v1.3.4:
- * - Use native v.c.kwh metric for energy tracking (more accurate than SOC calculation)
- * - Fallback to SOC-based calculation if v.c.kwh unavailable
- * - Improved accuracy: uses actual measured energy vs estimated from SOC
- * - Simplifies code by leveraging OVMS built-in session tracking
  * 
  * NEW IN v1.3.3:
  * - Improved command naming for clarity
@@ -114,8 +103,8 @@
 // VERSION INFO
 // ============================================================================
 
-var VERSION = "1.3.5";
-var BUILD_DATE = "2025-12-06";
+var VERSION = "1.3.3";
+var BUILD_DATE = "2025-12-03";
 
 // ============================================================================
 // CONFIGURATION PARAMETERS
@@ -509,20 +498,8 @@ function calculateAndStoreSessionRate() {
     return;
   }
   
-  // v1.3.4: Use native OVMS energy tracking (more accurate than SOC calculation)
-  var kwh_delivered = OvmsMetrics.AsFloat("v.c.kwh");
-  var using_native_metric = true;
-  
-  // Fallback to SOC-based calculation if native metric unavailable or invalid
-  if (isNaN(kwh_delivered) || kwh_delivered <= 0) {
-    var battery = getBatteryParams();
-    kwh_delivered = (soc_gained / 100) * battery.effective_capacity;
-    using_native_metric = false;
-    print("[RATE] Using SOC-based energy calculation (v.c.kwh unavailable)\n");
-  } else {
-    print("[RATE] Using native v.c.kwh metric: " + kwh_delivered.toFixed(1) + " kWh\n");
-  }
-  
+  var battery = getBatteryParams();
+  var kwh_delivered = (soc_gained / 100) * battery.effective_capacity;
   var measured_rate = kwh_delivered / duration_hours;
   
   // Sanity check: Rate should be reasonable (0.5kW - 25kW)
@@ -672,16 +649,9 @@ function calculateCostForTimeRange(start_minutes, end_minutes, kwh_needed) {
   var pre_window_minutes = 0;
   var post_window_minutes = 0;
   
-  // v1.3.5: Fixed midnight-crossing logic
-  // Normalize charge times
-  var charge_start = start_minutes;
+  // Normalize times: keep everything in 0-1440 range for same-day, or allow >1440 for next-day
+  var charge_start = start_minutes % (24 * 60);
   var charge_duration = end_minutes - start_minutes;
-  
-  // If charge crosses midnight, normalize properly
-  if (charge_duration < 0) {
-    charge_duration += (24 * 60);  // Add 24 hours to duration
-  }
-  
   var charge_end = charge_start + charge_duration;
   
   // Window times
@@ -693,16 +663,9 @@ function calculateCostForTimeRange(start_minutes, end_minutes, kwh_needed) {
     win_end += (24 * 60);
   }
   
-  // If charge crosses midnight (end is before start in clock time), extend charge_end
-  if (charge_end > (24 * 60)) {
-    // Charge extends into next day
-    // Also need to check if window is same-day or crosses midnight
-    if (win_end < (24 * 60)) {
-      // Window is same-day but charge crosses midnight
-      // Need to shift window forward a day for comparison
-      win_start += (24 * 60);
-      win_end += (24 * 60);
-    }
+  // If charge crosses midnight, extend charge_end into next day  
+  if (charge_end > (24 * 60) || (charge_end < charge_start && charge_duration > 0)) {
+    // Charge extends into next day - already handled by charge_end = charge_start + duration
   }
   
   // Calculate overlap between [charge_start, charge_end] and [win_start, win_end]
@@ -819,7 +782,7 @@ function startCharging() {
   var charger_rate = getEffectiveChargeRate();
   var charge_hours = kwh_needed / charger_rate;
   var now_minutes = getCurrentMinuteOfDay();
-  var finish_minutes = now_minutes + Math.round(charge_hours * 60);  // v1.3.5: Round to prevent decimals
+  var finish_minutes = now_minutes + (charge_hours * 60);
   
   var message = "Charging started (manual)\n";
   message += "From: " + soc.toFixed(0) + "% -> To: " + target + "%\n";
@@ -1069,7 +1032,7 @@ function checkSchedule() {
   var charger_rate = getEffectiveChargeRate();
   var charge_hours = kwh_needed / charger_rate;
   var now_minutes = getCurrentMinuteOfDay();
-  var finish_minutes = now_minutes + Math.round(charge_hours * 60);  // v1.3.5: Round to prevent decimals
+  var finish_minutes = now_minutes + (charge_hours * 60);
   
   var message = "Charging started (scheduled)\n";
   message += "From: " + soc.toFixed(0) + "% -> To: " + target + "%\n";
